@@ -1,6 +1,6 @@
 # myapp – Serverless API trên AWS (CloudFormation)
 
-Client → **API Gateway (HTTP API)** → **Lambda** (trong private subnet của VPC) → EFS, Aurora PostgreSQL Serverless v2, ElastiCache (Valkey), DynamoDB, S3, Secrets Manager.
+Client → **API Gateway (REST)** → **Lambda** (mỗi endpoint/method một function, chạy trong private subnet) → EFS, Aurora PostgreSQL Serverless v2, ElastiCache (Valkey), DynamoDB, S3, Secrets Manager.
 
 VPC **không có NAT Gateway**. Lambda gọi các dịch vụ AWS hoàn toàn qua đường private:
 
@@ -8,64 +8,127 @@ VPC **không có NAT Gateway**. Lambda gọi các dịch vụ AWS hoàn toàn qu
 |---|---|
 | S3, DynamoDB | Gateway VPC Endpoint (miễn phí) |
 | Secrets Manager | Interface VPC Endpoint (PrivateLink) |
-| Aurora, ElastiCache, EFS | Đặt trong cùng private subnet, kiểm soát bằng Security Group |
+| Aurora, ElastiCache, EFS | Nằm trong cùng private subnet, kiểm soát bằng Security Group |
 
-> Sơ đồ vẽ "Endpoint" cho ElastiCache, nhưng ElastiCache không có VPC endpoint kiểu PrivateLink cho data plane. Cluster được đặt trực tiếp trong private subnet, và Lambda kết nối tới nó qua Security Group (port 6379, có TLS).
+> Sơ đồ vẽ "Endpoint" cho ElastiCache, nhưng ElastiCache không có VPC endpoint kiểu PrivateLink cho data plane. Cluster được đặt thẳng trong private subnet, và Lambda kết nối qua Security Group (port 6379, có TLS).
 
 ## Cấu trúc thư mục
 
+Theo cùng quy ước với `cfn101-workshop/templates`: các stack độc lập, liên kết với nhau bằng `Export` / `!ImportValue`.
+
 ```
 .
-├── bootstrap/bootstrap.yaml      # Chạy 1 lần/môi trường: artifact bucket, OIDC, IAM roles cho CI/CD
-├── infra/
-│   ├── main.yaml                 # Root stack – gọi các nested stack
-│   ├── stacks/
-│   │   ├── network.yaml          # VPC, subnets, SG, VPC endpoints, flow logs
-│   │   ├── storage.yaml          # S3, DynamoDB, EFS (+ mount targets, access point)
-│   │   ├── database.yaml         # Aurora PostgreSQL Serverless v2 (secret do RDS quản lý)
-│   │   ├── cache.yaml            # ElastiCache Valkey (TLS)
-│   │   ├── security.yaml         # IAM managed policies dùng chung, role của workload, app secret
-│   │   └── compute.yaml          # Lambda, HTTP API
-│   └── parameters/
-│       ├── dev.json              # Cấu hình riêng cho từng môi trường
-│       ├── test.json
-│       └── prod.json
-├── src/api/                      # Code Lambda (Python 3.12, arm64)
-├── tests/                        # Unit test
+├── templates/
+│   ├── infrastructure/              # Stack nền, mỗi file một stack, deploy theo thứ tự từ trên xuống
+│   │   ├── private-vpc.yml          #   VPC, subnet, security group, VPC endpoint, flow logs
+│   │   ├── storage.yml              #   S3, DynamoDB, EFS (+ mount target, access point)
+│   │   ├── database.yml             #   Aurora PostgreSQL Serverless v2 (secret do RDS quản lý)
+│   │   ├── cache.yml                #   ElastiCache Valkey (TLS)
+│   │   ├── secrets.yml              #   Secret của ứng dụng
+│   │   ├── role.yml                 #   IAM managed policy dùng chung (mỗi policy một năng lực)
+│   │   └── api-gateway.yml          #   REST API + request validator
+│   ├── layers/
+│   │   └── common/
+│   │       ├── layer.yml            #   Lambda layer
+│   │       ├── requirements.txt     #   pg8000, redis
+│   │       └── python/common/       #   code dùng chung: clients.py, http.py
+│   └── api-gateways/
+│       ├── stage.yml                # Stage <env>, deploy cuối cùng
+│       ├── health/
+│       │   ├── main_template.yml    #   resource /health, /health/deps
+│       │   ├── GET/                 #   GET /health
+│       │   │   ├── template.yml         function + IAM role riêng + API method
+│       │   │   ├── lambda_function.yml  version + alias "live" + invoke permission
+│       │   │   └── src/lambda_function.py
+│       │   └── deps/GET/            #   GET /health/deps
+│       └── items/
+│           ├── main_template.yml    #   resource /items, /items/{id}
+│           ├── POST/                #   POST /items
+│           └── {id}/GET/            #   GET /items/{id}
+├── parameters/                      # Cấu hình riêng mỗi môi trường: dev.json, test.json, prod.json
+├── bootstrap/bootstrap.yml          # Chạy 1 lần/môi trường: artifact bucket, OIDC, IAM cho CI/CD
 ├── scripts/
-│   ├── build-lambda.sh           # Build package Lambda vào build/lambda
-│   └── deploy.sh                 # package + deploy 1 môi trường
-├── .github/workflows/
-│   ├── ci.yml                    # PR: cfn-lint + pytest + build
-│   └── deploy.yml                # Push vào nhánh: deploy lên môi trường tương ứng
-└── Makefile
+│   ├── build-layers.sh              # Build templates/layers/* vào build/layers/*
+│   └── deploy.sh                    # Deploy 1 môi trường theo thứ tự các stack
+├── tests/                           # Unit test cho từng function
+└── .github/workflows/
+    ├── ci.yml                       # PR: lint + test + build
+    ├── _deploy.yml                  # reusable: env theo nhánh, lint, OIDC, deploy.sh, smoke test
+    ├── infra-<stack>.yml            # 1 pipeline / 1 stack cố định trong templates/infrastructure
+    ├── layers.yml                   # layers → api
+    ├── api.yml                      # api-gateways/**
+    └── deploy-all.yml               # thủ công: tạo môi trường mới theo đúng thứ tự
 ```
 
-**Nguyên tắc:** chỉ có **một bộ template** dùng chung. Mọi khác biệt giữa các môi trường (CIDR, kích cỡ DB/cache, số replica, deletion protection, log retention…) đều nằm trong `infra/parameters/<env>.json`, không nằm trong `Conditions` theo tên môi trường.
+### Quy ước đặt tên (do `scripts/deploy.sh` tự suy ra từ đường dẫn)
+
+| Thư mục | Resource key (export) | Function / stack | Quyền invoke |
+|---|---|---|---|
+| `health/GET` | `health` | `myapp-dev-fn-health-get` | `GET/health` |
+| `health/deps/GET` | `health-deps` | `myapp-dev-fn-health-deps-get` | `GET/health/deps` |
+| `items/POST` | `items` | `myapp-dev-fn-items-post` | `POST/items` |
+| `items/{id}/GET` | `items-id` | `myapp-dev-fn-items-id-get` | `GET/items/*` |
+
+- Tên mọi export đều có dạng `<InfrastructureName>-<EnvironmentType>-<Tên>`, ví dụ `myapp-dev-PrivateSubnet1`. Các môi trường dùng chung một account vẫn không đụng nhau.
+- Tên mọi stack đều có dạng `<InfrastructureName>-<EnvironmentType>-<component>`, ví dụ `myapp-dev-database`.
+
+### Thêm một endpoint mới, ví dụ `DELETE /items/{id}`
+
+1. Tạo `templates/api-gateways/items/{id}/DELETE/` và copy 3 file từ `{id}/GET/`.
+2. Sửa `template.yml`: chỉ gắn những managed policy cần dùng (ở đây là `ItemsTableReadWritePolicy`) và các biến môi trường cần thiết.
+3. Viết `src/lambda_function.py`.
+
+Pipeline sẽ tự phát hiện thư mục mới, rồi đặt tên và deploy `myapp-<env>-fn-items-id-delete`. Nếu cần một path mới, thêm resource vào `main_template.yml` của API đó và export với tên `ApiResource-<key>`.
+
+### Khác với workshop gốc ở đâu, và vì sao
+
+| Workshop | Ở đây | Lý do |
+|---|---|---|
+| Export `RestApiId`, `LambdaExecutionRole`… không kèm môi trường | `myapp-<env>-RestApiId` | Tên export là duy nhất trong mỗi region. Nếu dev và test chung account, export không kèm môi trường sẽ xung đột |
+| Một function dùng chung cho mọi môi trường, phân biệt bằng alias `dev`/`test` | Mỗi môi trường có function riêng, alias `live` | Mỗi môi trường có VPC, DB và cache riêng. Deploy test cũng không ghi đè code của dev |
+| Một `LambdaExecutionRole` dùng chung | Mỗi function có role riêng, ghép từ các policy trong `role.yml` | Đảm bảo least privilege, và CloudTrail phân biệt được function nào đã gọi |
+| Layer export ARN (`!ImportValue pandas-layer`) | Script đọc output của stack layer rồi truyền vào | ARN thay đổi mỗi khi layer có version mới, mà CloudFormation không cho cập nhật một export đang được import |
+| `sed` thay `\|COMMIT_HASH\|` trong template | `aws cloudformation package` (`Code: ./src`) | Template không bị sửa lúc build. Code không đổi thì S3 key giữ nguyên, nên function cũng không bị update |
+| Access key lưu trong GitHub secrets | OIDC + role riêng cho từng môi trường | Không có credential dài hạn nào |
 
 ## Chiến lược nhánh & môi trường
 
-| Nhánh | Môi trường | Stack | Ghi chú |
-|---|---|---|---|
-| `dev` | dev | `myapp-dev` | Tự động deploy khi merge |
-| `test` | test | `myapp-test` | Tự động deploy khi merge (QA/UAT) |
-| `main` | prod | `myapp-prod` | Cần reviewer duyệt (GitHub Environment protection) |
-
-Quy trình:
+| Nhánh | Môi trường | Khi merge |
+|---|---|---|
+| `dev` | dev | tự deploy |
+| `test` | test | tự deploy |
+| `main` | prod | cần người duyệt (GitHub Environment protection) |
 
 ```
 feature/xyz ──PR──▶ dev ──PR──▶ test ──PR──▶ main
-                     │            │            │
-                  deploy dev   deploy test  deploy prod (cần duyệt)
 ```
 
-- Mỗi PR chạy `ci.yml` (lint, test, build). Bật branch protection để bắt buộc CI pass.
-- Khi merge, `deploy.yml` xác định môi trường theo tên nhánh, assume IAM role của **đúng môi trường đó** qua OIDC rồi chạy `scripts/deploy.sh`.
-- Muốn thêm môi trường (ví dụ `staging`): thêm `infra/parameters/staging.json`, thêm `staging` vào `AllowedValues` trong `main.yaml` và `bootstrap.yaml`, thêm dòng mapping trong `deploy.yml`, rồi bootstrap môi trường mới.
+Mỗi stack có pipeline riêng. Pipeline chỉ chạy khi file của nó thay đổi:
+
+| Pipeline | Kích hoạt khi thay đổi | Deploy |
+|---|---|---|
+| `infra / private-vpc` | `templates/infrastructure/private-vpc.yml`, `parameters/**` | `<infra>-<env>-private-vpc` |
+| `infra / storage` | `.../storage.yml`, `parameters/**` | `<infra>-<env>-storage` |
+| `infra / database` | `.../database.yml`, `parameters/**` | `<infra>-<env>-database` |
+| `infra / cache` | `.../cache.yml`, `parameters/**` | `<infra>-<env>-cache` |
+| `infra / secrets` | `.../secrets.yml`, `parameters/**` | `<infra>-<env>-secrets` |
+| `infra / role` | `.../role.yml`, `parameters/**` | `<infra>-<env>-role` |
+| `infra / api-gateway` | `.../api-gateway.yml`, `parameters/**` | `<infra>-<env>-api-gateway` |
+| `layers` | `templates/layers/**`, `scripts/build-layers.sh` | layers, rồi api (function cần ARN của layer mới) |
+| `api` | `templates/api-gateways/**` | resource, function, alias, stage + smoke test |
+| `deploy-all` | chỉ chạy thủ công | toàn bộ, theo thứ tự phụ thuộc |
+
+Ghi chú:
+- Tất cả pipeline gọi chung `_deploy.yml`. Logic (map nhánh → môi trường, OIDC, deploy) chỉ nằm ở một chỗ, file pipeline của từng stack chỉ khoảng 30 dòng.
+- Mỗi cặp (môi trường, stack) chỉ có một lần deploy tại một thời điểm, còn các stack khác nhau thì chạy song song. Pipeline `api` và job api của `layers` dùng chung một concurrency group nên không bao giờ deploy function cùng lúc.
+- `parameters/<env>.json` dùng chung, nên sửa file này sẽ chạy cả 7 pipeline infra. Stack nào không có tham số thay đổi sẽ kết thúc với changeset rỗng (no-op).
+- Khi tạo môi trường **mới**, chạy `deploy-all` (scope `all`), vì các stack import export của nhau theo thứ tự `private-vpc → storage → database → cache → secrets → role → api-gateway → layers → api`. Sau đó mới dùng pipeline riêng của từng stack.
+- Sửa `scripts/deploy.sh` không kích hoạt pipeline nào. Muốn áp dụng thì chạy `deploy-all`.
+- Mỗi pipeline đều có `workflow_dispatch` để chạy lại một stack cho một môi trường bất kỳ.
 
 ## Thiết lập lần đầu
 
-### 1. Tạo repo và các nhánh
+### 1. Repo và các nhánh
 
 ```bash
 git init -b main
@@ -75,21 +138,25 @@ git remote add origin git@github.com:<org>/<repo>.git
 git push -u origin main dev test
 ```
 
-### 2. Bootstrap từng môi trường (dùng credential admin, chạy 1 lần)
-
-Bước này tạo stack `bootstrap-<project>-<env>` gồm: artifact bucket, GitHub OIDC provider, permissions boundary, role `bootstrap/*-github-deploy` (GitHub Actions assume) và role `bootstrap/*-cfn-exec` (CloudFormation dùng để tạo resource). Xem mục [Mô hình phân quyền](#mô-hình-phân-quyền-iam).
+### 2. Bootstrap từng môi trường (credential admin, chạy 1 lần)
 
 ```bash
 make bootstrap ENV=dev  GITHUB_ORG=<org> GITHUB_REPO=<repo>
-make bootstrap ENV=test GITHUB_ORG=<org> GITHUB_REPO=<repo> CREATE_OIDC=false   # nếu cùng account với dev
-make bootstrap ENV=prod GITHUB_ORG=<org> GITHUB_REPO=<repo>                     # account prod riêng (khuyến nghị)
+make bootstrap ENV=test GITHUB_ORG=<org> GITHUB_REPO=<repo> SINGLETONS=false   # nếu cùng account với dev
+make bootstrap ENV=prod GITHUB_ORG=<org> GITHUB_REPO=<repo>                    # account prod riêng (khuyến nghị)
 ```
 
-> Mỗi AWS account chỉ được có **một** GitHub OIDC provider. Nếu nhiều môi trường dùng chung account, chỉ môi trường đầu tiên để `CREATE_OIDC=true`.
+Bước này tạo stack `bootstrap-<infra>-<env>`, gồm:
+- artifact bucket;
+- permissions boundary;
+- role `bootstrap/*-github-deploy` (GitHub Actions assume);
+- role `bootstrap/*-cfn-exec` (CloudFormation dùng để tạo resource).
 
-### 3. Tạo GitHub Environments
+Ngoài ra còn có các **resource cấp account**: GitHub OIDC provider, và CloudWatch role cho API Gateway (bắt buộc để stage REST ghi access log). Mỗi account chỉ có một bộ này, nên các môi trường dùng chung account phải đặt `SINGLETONS=false`.
 
-Vào **Settings → Environments**, tạo `dev`, `test`, `prod`. Với mỗi environment, thêm các **Variables** sau, lấy giá trị từ output của bootstrap stack:
+### 3. GitHub Environments
+
+Vào **Settings → Environments**, tạo `dev`, `test`, `prod`. Mỗi environment cần các **Variables** sau, lấy từ output của bootstrap:
 
 | Variable | Giá trị |
 |---|---|
@@ -98,86 +165,70 @@ Vào **Settings → Environments**, tạo `dev`, `test`, `prod`. Với mỗi env
 | `ARTIFACT_BUCKET` | `ArtifactBucketName` |
 | `CFN_EXECUTION_ROLE_ARN` | `CloudFormationExecutionRoleArn` |
 
-Với `prod`: bật **Required reviewers** và giới hạn **Deployment branches** chỉ cho `main`. Tương tự, giới hạn `dev` chỉ cho nhánh `dev` và `test` chỉ cho nhánh `test`.
-
-Trust policy của role chỉ chấp nhận token có `sub = repo:<org>/<repo>:environment:<env>`. Vì vậy job deploy dev không thể assume role prod.
+Với `prod`: bật **Required reviewers**, và giới hạn **Deployment branches** chỉ cho `main`.
 
 ### 4. Bảo vệ nhánh
 
-Với `dev`, `test`, `main`: bắt buộc tạo PR, bắt buộc check **CI / Lint & test** pass, và không cho push thẳng.
+Với `dev`, `test`, `main`: bắt buộc tạo PR, và bắt buộc check **CI / Lint & test** pass.
 
 ## Deploy thủ công từ máy local
 
-Cần: AWS CLI v2, `jq`, Python 3, `cfn-lint`.
+Cần: AWS CLI v2, `jq`, Python 3, `cfn-lint`, `pytest`.
 
 ```bash
-pip install cfn-lint pytest boto3 -r src/api/requirements.txt
+pip install cfn-lint pytest boto3 -r templates/layers/common/requirements.txt
 make lint test
 
 export ARTIFACT_BUCKET=myapp-dev-artifacts-<account>-<region>
-make plan   ENV=dev     # chỉ tạo change set để xem trước thay đổi
-make deploy ENV=dev
+make deploy ENV=dev                 # toàn bộ
+make deploy ENV=dev SCOPE=api       # chỉ API (resource, function, alias, stage)
+make deploy ENV=dev SCOPE=infrastructure STACK=database   # 1 stack infra
 ```
 
 ## Kiểm tra sau khi deploy
 
 ```bash
-API=$(aws cloudformation describe-stacks --stack-name myapp-dev \
+API=$(aws cloudformation describe-stacks --stack-name myapp-dev-api-stage \
   --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
 
-curl $API/health                       # Lambda sống
-curl $API/health/deps                  # Kiểm tra Aurora, ElastiCache, EFS
-curl -X POST $API/items -d '{"name":"book"}'   # Ghi vào DynamoDB, S3 và log EFS
-curl $API/items/<id>                   # Lần 1 đọc từ dynamodb, lần 2 đọc từ cache
+curl $API/health                                   # Lambda sống
+curl $API/health/deps                              # Kiểm tra Aurora, ElastiCache, EFS
+curl -X POST $API/items -H 'Content-Type: application/json' -d '{"name":"book"}'
+curl $API/items/<id>                               # Lần 1 đọc từ dynamodb, lần 2 đọc từ cache
+```
+
+**Rollback một function:** trỏ alias `live` về version cũ.
+
+```bash
+aws lambda update-alias --function-name myapp-dev-fn-items-post --name live --function-version <N>
 ```
 
 ## Mô hình phân quyền (IAM)
 
 ```
-GitHub Actions ──OIDC──▶ bootstrap/<p>-<env>-github-deploy   (chỉ: CreateChangeSet/Execute, upload artifact, PassRole)
+GitHub Actions ──OIDC──▶ bootstrap/<infra>-<env>-github-deploy   (change set, upload artifact, tạo API deployment, PassRole)
                                    │ --role-arn
                                    ▼
-                         bootstrap/<p>-<env>-cfn-exec          (quyền tạo resource, giới hạn theo dịch vụ / tên / region)
+                         bootstrap/<infra>-<env>-cfn-exec          (quyền tạo resource, giới hạn theo dịch vụ / tên / region)
                                    │ chỉ được tạo role CÓ boundary
                                    ▼
-                         <p>-<env>-api-fn, <p>-<env>-vpc-flowlogs …   ≤  boundaries/<p>-<env>-boundary
+                         <infra>-<env>-fn-*, <infra>-<env>-vpc-flowlogs   ≤  boundaries/<infra>-<env>-boundary
 ```
 
-Có 3 lớp bảo vệ:
+1. **Tách người gọi và người thực thi.** Role của GitHub không có quyền tạo resource. Nó chỉ ra lệnh cho CloudFormation.
+2. **`cfn-exec` có quyền giới hạn.** Lambda, layer, log group, S3, DynamoDB, secret, IAM bị giới hạn theo tên `<infra>-<env>-*`. Các dịch vụ có ID tự sinh (EC2, RDS, ElastiCache, EFS, API Gateway) bị giới hạn theo region.
+3. **Permissions boundary.** `cfn-exec` chỉ tạo được role khi role đó có gắn boundary, và role/policy của bootstrap (path `/bootstrap/`) bị Deny tường minh. Vì vậy pipeline không thể tự nâng quyền.
 
-1. **Tách người gọi và người thực thi.** Role của GitHub không có quyền tạo resource. Nó chỉ ra lệnh cho CloudFormation, và CloudFormation dùng `cfn-exec` để tạo resource.
-2. **`cfn-exec` có quyền giới hạn, không dùng `AdministratorAccess`:**
-   - Lambda, log group, S3, DynamoDB, secret, IAM role/policy bị giới hạn theo tên `<project>-<env>-*`, nên dev không đụng được tài nguyên của test.
-   - Các dịch vụ có ID tự sinh (EC2/VPC, RDS, ElastiCache, EFS, API Gateway) được giới hạn theo region.
-3. **Permissions boundary (chống leo thang quyền).**
-   - `cfn-exec` chỉ được `CreateRole`/`AttachRolePolicy`/`PutRolePolicy` khi role đó có gắn `boundaries/<p>-<env>-boundary`.
-   - Dù template khai báo `AdministratorAccess` cho một role, quyền thực tế vẫn chỉ bằng phần giao giữa policy đó và boundary.
-   - Role/policy của bootstrap nằm ở path `/bootstrap/` và bị Deny tường minh, nên pipeline không thể tự nâng quyền của chính mình.
+**Dùng chung policy, không dùng chung role.** `templates/infrastructure/role.yml` export các managed policy nhỏ: `ItemsTableReadWritePolicy`, `ItemsTableReadOnlyPolicy`, `DataBucketReadWritePolicy`, `SecretsReadPolicy`, `EfsClientPolicy`. Mỗi `template.yml` tự tạo role cho function của mình và chỉ gắn những policy cần dùng:
 
-### Tái sử dụng role/policy (`infra/stacks/security.yaml`)
+| Function | Policy |
+|---|---|
+| `health-get` | `AWSLambdaBasicExecutionRole` (không vào VPC) |
+| `health-deps-get` | VPC access, `SecretsReadPolicy`, `EfsClientPolicy` |
+| `items-post` | VPC access, `ItemsTableReadWritePolicy`, `DataBucketReadWritePolicy`, `EfsClientPolicy` |
+| `items-id-get` | VPC access, `ItemsTableReadOnlyPolicy` |
 
-- **Dùng chung policy, không dùng chung role.** Mỗi năng lực là một managed policy nhỏ: `items-table-rw`, `items-table-ro`, `data-bucket-rw`, `secrets-read`, `efs-client`.
-- **Mỗi workload có role riêng**, ghép từ các policy trên. Nếu nhiều Lambda dùng chung một role, function nào cũng có quyền của mọi function khác, và CloudTrail không phân biệt được ai gọi.
-- **ARN được export** dưới dạng `<project>-<env>:<Tên>`. Stack khác trong cùng account/region có thể dùng lại như sau:
-
-```yaml
-WorkerRole:
-  Type: AWS::IAM::Role
-  Properties:
-    RoleName: !Sub myapp-${Environment}-worker-fn          # phải khớp <project>-<env>-*
-    PermissionsBoundary: !ImportValue myapp-dev:PermissionsBoundaryArn
-    AssumeRolePolicyDocument: { ... lambda.amazonaws.com ... }
-    ManagedPolicyArns:
-      - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      - !ImportValue myapp-dev:ItemsTableReadOnlyPolicyArn
-      - !ImportValue myapp-dev:AppSecretsReadPolicyArn
-```
-
-> Lưu ý khi dùng export: CloudFormation không cho sửa hoặc xoá một export khi còn stack khác đang `!ImportValue` nó. Vì vậy chỉ export những thứ ổn định như ARN của policy/role. Nếu cần ít ràng buộc hơn, có thể ghi ARN vào SSM Parameter Store (`/myapp/dev/iam/...`) và đọc qua `{{resolve:ssm:...}}`.
-
-`FlowLogRole` vẫn nằm trong `network.yaml`. Đây là service role chỉ phục vụ log group của VPC flow logs, và chuyển nó sang `security.yaml` sẽ tạo phụ thuộc vòng: security → storage → network → security.
-
-## Khác biệt giữa các môi trường
+## Khác biệt giữa các môi trường (`parameters/*.json`)
 
 | | dev | test | prod |
 |---|---|---|---|
@@ -188,11 +239,12 @@ WorkerRole:
 | Deletion protection | tắt | tắt | bật |
 | Log retention | 7 ngày | 14 ngày | 90 ngày |
 
+Mọi stack đều nhận toàn bộ file parameter. `aws cloudformation deploy` chỉ chuyển những key mà template đó có khai báo.
+
 ## Lưu ý vận hành
 
-- **Tài nguyên có dữ liệu:** S3 bucket và DynamoDB table dùng `DeletionPolicy: Retain`. Aurora dùng `Snapshot`. Khi xoá stack, dữ liệu vẫn được giữ lại và phải dọn thủ công.
-- **Mật khẩu DB** do RDS tự sinh và lưu trong Secrets Manager (`ManageMasterUserPassword`), không xuất hiện trong template hay pipeline.
-- **Production:** nên thêm RDS Proxy (connection pooling cho Lambda), AWS WAF/custom domain cho API và CloudWatch alarms.
-- **Thêm dịch vụ mới** (ví dụ SQS): cần thêm quyền cho dịch vụ đó vào `CfnExecInfraPolicy` (để tạo được resource) **và** vào `WorkloadPermissionsBoundary` (để role được dùng), rồi deploy lại bootstrap bằng credential admin. Đây là chủ đích thiết kế: mở thêm quyền phải qua người quản trị, không tự mở được qua PR.
-- **S3 bucket và DynamoDB table có tên cố định** (cần để giới hạn IAM theo tên). Vì chúng dùng `Retain`, sau khi xoá stack phải xoá tay bucket/table cũ thì mới tạo lại được.
-- **Chi phí:** Interface endpoint của Secrets Manager (2 AZ), Aurora và ElastiCache tính tiền theo giờ, kể cả ở dev. Nên xoá stack dev/test khi không dùng.
+- **Thứ tự xoá ngược với thứ tự tạo.** Không xoá được một stack khi còn stack khác đang `!ImportValue` output của nó. Thứ tự xoá: stage → function/alias → `api-*` → layer → `api-gateway` → `role` → `secrets` → `cache` → `database` → `storage` → `private-vpc`.
+- **Dữ liệu được giữ lại.** S3 bucket và DynamoDB table dùng `Retain`, Aurora dùng `Snapshot`. Bucket và table có tên cố định, nên sau khi xoá stack phải xoá tay chúng thì mới tạo lại được.
+- **Thêm dịch vụ AWS mới.** Phải bổ sung quyền vào `CfnExecInfraPolicy` **và** `WorkloadPermissionsBoundary` trong `bootstrap/bootstrap.yml`, rồi deploy lại bootstrap bằng credential admin.
+- **Production.** Nên thêm RDS Proxy, WAF và custom domain cho API, cùng CloudWatch alarms.
+- **Chi phí.** Interface endpoint của Secrets Manager, Aurora và ElastiCache tính tiền theo giờ, kể cả ở dev.

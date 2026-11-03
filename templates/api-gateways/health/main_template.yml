@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  API resources for /health and /health/deps. Methods live in the sub-folders
+  (GET/, deps/GET/).
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  HealthResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ParentId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiRootResourceId
+      PathPart: health
+
+  HealthDepsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ParentId: !Ref HealthResource
+      PathPart: deps
+
+Outputs:
+  HealthResource:
+    Value: !Ref HealthResource
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ApiResource-health
+  HealthDepsResource:
+    Value: !Ref HealthDepsResource
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ApiResource-health-deps

@@ -1,8 +1,7 @@
 templates:
-  - infra/main.yaml
-  - infra/stacks/*.yaml
-  - bootstrap/*.yaml
+  - templates/**/*.yml
+  - bootstrap/*.yml
 regions:
   - ap-southeast-1
 ignore_checks:
-  - W3002   # local paths are resolved by `aws cloudformation package`
+  - W3002   # local paths (Code/Content) are resolved by `aws cloudformation package`

@@ -1,0 +1,30 @@
+name: infra / database
+
+# Pipeline of the fixed stack <infra>-<env>-database (templates/infrastructure/database.yml).
+# Runs when that template or the environment parameters change.
+on:
+  push:
+    branches: [dev, test, main]
+    paths:
+      - templates/infrastructure/database.yml
+      - parameters/**
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, test, prod]
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      scope: infrastructure
+      stack: database
+      environment: ${{ inputs.environment }}
+      lint-paths: templates/infrastructure/database.yml

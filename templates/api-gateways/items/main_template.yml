@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  API resources for /items and /items/{id}. Methods live in the sub-folders
+  (POST/, {id}/GET/). Export names follow ApiResource-<path with "/" -> "-">.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  ItemsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ParentId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiRootResourceId
+      PathPart: items
+
+  ItemIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ParentId: !Ref ItemsResource
+      PathPart: "{id}"
+
+Outputs:
+  ItemsResource:
+    Value: !Ref ItemsResource
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ApiResource-items
+  ItemIdResource:
+    Value: !Ref ItemIdResource
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ApiResource-items-id

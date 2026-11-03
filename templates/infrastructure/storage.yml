@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Storage - S3 data bucket, DynamoDB items table and EFS file system (mount
+  targets in both private subnets + access point for Lambda).
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  EnablePointInTimeRecovery:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+  EnableEfsBackup:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+
+Conditions:
+  EfsBackupEnabled: !Equals [!Ref EnableEfsBackup, "true"]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # S3
+  # ---------------------------------------------------------------------------
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${InfrastructureName}-${EnvironmentType}-data-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+          - Id: abort-incomplete-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub ${DataBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # ---------------------------------------------------------------------------
+  # DynamoDB
+  # ---------------------------------------------------------------------------
+  ItemsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub ${InfrastructureName}-${EnvironmentType}-items
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !Ref EnablePointInTimeRecovery
+      SSESpecification:
+        SSEEnabled: true
+
+  # ---------------------------------------------------------------------------
+  # EFS
+  # ---------------------------------------------------------------------------
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: elastic
+      BackupPolicy:
+        Status: !If [EfsBackupEnabled, ENABLED, DISABLED]
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+      FileSystemTags:
+        - Key: Name
+          Value: !Sub ${InfrastructureName}-${EnvironmentType}-efs
+
+  MountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet1
+      SecurityGroups:
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-EfsSecurityGroup
+
+  MountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet2
+      SecurityGroups:
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-EfsSecurityGroup
+
+  LambdaAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser:
+        Uid: "1000"
+        Gid: "1000"
+      RootDirectory:
+        Path: /lambda
+        CreationInfo:
+          OwnerUid: "1000"
+          OwnerGid: "1000"
+          Permissions: "750"
+
+Outputs:
+  DataBucketName:
+    Value: !Ref DataBucket
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DataBucketName
+  DataBucketArn:
+    Value: !GetAtt DataBucket.Arn
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DataBucketArn
+  ItemsTableName:
+    Value: !Ref ItemsTable
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ItemsTableName
+  ItemsTableArn:
+    Value: !GetAtt ItemsTable.Arn
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ItemsTableArn
+  FileSystemArn:
+    Value: !GetAtt FileSystem.Arn
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-FileSystemArn
+  # Mount targets are created in this stack, so importing stacks only start
+  # after they are available.
+  EfsAccessPointArn:
+    Value: !GetAtt LambdaAccessPoint.Arn
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-EfsAccessPointArn

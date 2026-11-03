@@ -1,16 +1,16 @@
 SHELL := /bin/bash
 AWS_REGION ?= ap-southeast-1
-PROJECT    ?= myapp
+INFRA      ?= myapp
+SCOPE      ?= all
 
-.PHONY: help lint test build plan deploy bootstrap clean
+.PHONY: help lint test build deploy bootstrap clean
 
 help:
-	@echo "make lint                      - cfn-lint all templates"
-	@echo "make test                      - run unit tests"
-	@echo "make build                     - build Lambda package into build/lambda"
-	@echo "make plan   ENV=dev            - create & show change set only"
-	@echo "make deploy ENV=dev            - package + deploy (needs ARTIFACT_BUCKET)"
-	@echo "make bootstrap ENV=dev GITHUB_ORG=x GITHUB_REPO=y [CREATE_OIDC=false]"
+	@echo "make lint                                 - cfn-lint all templates"
+	@echo "make test                                 - unit tests for every function"
+	@echo "make build                                - build Lambda layers into build/layers"
+	@echo "make deploy ENV=dev [SCOPE=all|infrastructure|layers|api] [STACK=database]  (needs ARTIFACT_BUCKET)"
+	@echo "make bootstrap ENV=dev GITHUB_ORG=x GITHUB_REPO=y [SINGLETONS=false]"
 
 lint:
 	cfn-lint
@@ -19,29 +19,25 @@ test:
 	pytest -q
 
 build:
-	./scripts/build-lambda.sh
-
-plan:
-	@test -n "$(ENV)" || (echo "ENV is required" && exit 1)
-	AWS_REGION=$(AWS_REGION) ./scripts/deploy.sh $(ENV) --plan
+	./scripts/build-layers.sh
 
 deploy:
 	@test -n "$(ENV)" || (echo "ENV is required" && exit 1)
-	AWS_REGION=$(AWS_REGION) ./scripts/deploy.sh $(ENV)
+	AWS_REGION=$(AWS_REGION) ./scripts/deploy.sh $(ENV) $(SCOPE) $(STACK)
 
 bootstrap:
 	@test -n "$(ENV)" || (echo "ENV is required" && exit 1)
 	aws cloudformation deploy \
 	  --region $(AWS_REGION) \
-	  --template-file bootstrap/bootstrap.yaml \
-	  --stack-name bootstrap-$(PROJECT)-$(ENV) \
+	  --template-file bootstrap/bootstrap.yml \
+	  --stack-name bootstrap-$(INFRA)-$(ENV) \
 	  --capabilities CAPABILITY_NAMED_IAM \
 	  --parameter-overrides \
-	    ProjectName=$(PROJECT) Environment=$(ENV) \
+	    InfrastructureName=$(INFRA) EnvironmentType=$(ENV) \
 	    GitHubOrg=$(GITHUB_ORG) GitHubRepo=$(GITHUB_REPO) \
-	    CreateOidcProvider=$(or $(CREATE_OIDC),true)
+	    CreateAccountSingletons=$(or $(SINGLETONS),true)
 	aws cloudformation describe-stacks --region $(AWS_REGION) \
-	  --stack-name bootstrap-$(PROJECT)-$(ENV) --query 'Stacks[0].Outputs' --output table
+	  --stack-name bootstrap-$(INFRA)-$(ENV) --query 'Stacks[0].Outputs' --output table
 
 clean:
 	rm -rf build .pytest_cache

@@ -1,0 +1,32 @@
+{
+  "Parameters": {
+    "InfrastructureName": "myapp",
+    "EnvironmentType": "prod",
+    "VpcCIDR": "10.30.0.0/16",
+    "DbEngineVersion": "16.4",
+    "DbName": "appdb",
+    "DbMinCapacity": "1",
+    "DbMaxCapacity": "16",
+    "DbEnableReader": "true",
+    "DbBackupRetentionDays": "14",
+    "CacheEngineVersion": "7.2",
+    "CacheNodeType": "cache.r7g.large",
+    "CacheNumNodes": "2",
+    "LambdaMemorySize": "1024",
+    "LambdaTimeout": "15",
+    "LogLevel": "INFO",
+    "ApiThrottlingRateLimit": "500",
+    "ApiThrottlingBurstLimit": "1000",
+    "EnableDeletionProtection": "true",
+    "EnablePointInTimeRecovery": "true",
+    "EnableEfsBackup": "true",
+    "LogRetentionDays": "90"
+  },
+  "Tags": {
+    "Project": "myapp",
+    "Environment": "prod",
+    "Owner": "platform-team",
+    "CostCenter": "production",
+    "ManagedBy": "cloudformation"
+  }
+}

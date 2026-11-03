@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  API stage (named after the environment). Deployed last: scripts/deploy.sh
+  creates a new API deployment snapshot after all methods are in place and
+  passes its id here, so the stage always serves the latest methods.
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W6001   # ApiUrl intentionally re-uses the imported RestApiId
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  DeploymentId:
+    Type: String
+  ApiThrottlingRateLimit:
+    Type: Number
+    Default: 50
+  ApiThrottlingBurstLimit:
+    Type: Number
+    Default: 100
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  AccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${InfrastructureName}-${EnvironmentType}-api
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Requires the account-level API Gateway CloudWatch role (bootstrap.yml).
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      StageName: !Ref EnvironmentType
+      DeploymentId: !Ref DeploymentId
+      Variables:
+        env: !Ref EnvironmentType
+      AccessLogSetting:
+        DestinationArn: !GetAtt AccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "method":"$context.httpMethod","path":"$context.resourcePath",
+          "status":"$context.status","latency":"$context.responseLatency",
+          "integrationError":"$context.integrationErrorMessage"}
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          MetricsEnabled: true
+          ThrottlingRateLimit: !Ref ApiThrottlingRateLimit
+          ThrottlingBurstLimit: !Ref ApiThrottlingBurstLimit
+
+Outputs:
+  ApiUrl:
+    Value: !Sub
+      - https://${RestApiId}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${EnvironmentType}
+      - RestApiId: !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId

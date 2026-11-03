@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  REST API shell (one per environment) plus shared request validators.
+  Resources/methods are added by templates/api-gateways/*, and the stage is
+  managed by templates/api-gateways/stage.yml.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-api
+      Description: !Sub ${InfrastructureName} API (${EnvironmentType})
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  RequestParametersValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      RestApiId: !Ref RestApi
+      Name: ValidateRequestParameters
+      ValidateRequestParameters: true
+      ValidateRequestBody: false
+
+  RequestBodyValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      RestApiId: !Ref RestApi
+      Name: ValidateRequestBody
+      ValidateRequestParameters: true
+      ValidateRequestBody: true
+
+Outputs:
+  RestApiId:
+    Value: !Ref RestApi
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-RestApiId
+  RestApiRootResourceId:
+    Value: !GetAtt RestApi.RootResourceId
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-RestApiRootResourceId
+  RequestParametersValidator:
+    Value: !Ref RequestParametersValidator
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-RequestParametersValidator
+  RequestBodyValidator:
+    Value: !Ref RequestBodyValidator
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-RequestBodyValidator

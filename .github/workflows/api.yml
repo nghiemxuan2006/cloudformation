@@ -1,0 +1,28 @@
+name: api
+
+# API resources, functions (+ "live" alias) and the stage (templates/api-gateways/**).
+on:
+  push:
+    branches: [dev, test, main]
+    paths:
+      - templates/api-gateways/**
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, test, prod]
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      scope: api
+      environment: ${{ inputs.environment }}
+      lint-paths: templates/api-gateways/**/*.yml
+      smoke-test: true

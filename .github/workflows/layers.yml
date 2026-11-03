@@ -1,0 +1,38 @@
+name: layers
+
+# Lambda layers (templates/layers/*). Functions pin a layer version ARN, so a new
+# layer version is only picked up after the api stacks are redeployed - done here.
+on:
+  push:
+    branches: [dev, test, main]
+    paths:
+      - templates/layers/**
+      - scripts/build-layers.sh
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, test, prod]
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  layers:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      scope: layers
+      environment: ${{ inputs.environment }}
+      lint-paths: templates/layers/*/layer.yml
+
+  api:
+    needs: layers
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      scope: api
+      environment: ${{ inputs.environment }}
+      lint-paths: templates/api-gateways/**/*.yml
+      smoke-test: true

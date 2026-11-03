@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  GET /health - liveness probe. Touches no dependency, so it runs outside the
+  VPC and only needs basic logging permissions.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  LambdaFunctionFileName:
+    Type: String
+    Description: Derived from the folder path by scripts/deploy.sh (health-get)
+  ResourceKey:
+    Type: String
+    Description: API resource export suffix (health)
+  HttpMethod:
+    Type: String
+    AllowedValues: [GET, POST, PUT, PATCH, DELETE]
+  CommonLayerArn:
+    Type: String
+  LogLevel:
+    Type: String
+    Default: INFO
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${InfrastructureName}-${EnvironmentType}-fn-${LambdaFunctionFileName}
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boundaries/${InfrastructureName}-${EnvironmentType}-boundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      Handler: lambda_function.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      Code: ./src
+      Role: !GetAtt FunctionRole.Arn
+      MemorySize: 128
+      Timeout: 3
+      Layers:
+        - !Ref CommonLayerArn
+      LoggingConfig:
+        LogGroup: !Ref FunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref LogLevel
+        SystemLogLevel: WARN
+      Environment:
+        Variables:
+          ENV_TYPE: !Ref EnvironmentType
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ResourceId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ApiResource-${ResourceKey}
+      HttpMethod: !Ref HttpMethod
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}:live/invocations
+
+Outputs:
+  FunctionName:
+    Value: !Ref LambdaFunction

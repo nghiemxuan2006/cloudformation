@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Publishes a new version of the function for every commit and points the
+  "live" alias (used by API Gateway) at it. Roll back by re-pointing the alias.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  LambdaFunctionFileName:
+    Type: String
+  HttpMethod:
+    Type: String
+  ApiPath:
+    Type: String
+    Description: Resource path for the invoke permission ("{param}" -> "*")
+  CommitHash:
+    Type: String
+
+Resources:
+  LambdaVersion:
+    Type: AWS::Lambda::Version
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      Description: !Ref CommitHash   # changes every commit -> new version
+
+  LambdaAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      FunctionVersion: !GetAtt LambdaVersion.Version
+      Name: live
+      Description: !Ref CommitHash
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaAlias
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApiId}/*/${HttpMethod}/${ApiPath}
+        - RestApiId: !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+
+Outputs:
+  LiveVersion:
+    Value: !GetAtt LambdaVersion.Version

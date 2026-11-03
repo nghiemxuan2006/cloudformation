@@ -1,0 +1,32 @@
+name: deploy-all
+
+# Manual only. Deploys stacks in dependency order:
+#   private-vpc -> storage -> database -> cache -> secrets -> role -> api-gateway
+#   -> layers -> api
+# Use it to create a new environment (the per-stack pipelines assume the stacks
+# they import from already exist) or to redeploy everything after changing scripts/.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, test, prod]
+        required: true
+      scope:
+        description: What to deploy
+        type: choice
+        options: [all, infrastructure, layers, api]
+        default: all
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      scope: ${{ inputs.scope }}
+      environment: ${{ inputs.environment }}
+      smoke-test: ${{ inputs.scope == 'all' || inputs.scope == 'api' }}

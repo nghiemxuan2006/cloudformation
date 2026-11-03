@@ -1,0 +1,134 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Aurora PostgreSQL Serverless v2. The master password is generated and stored
+  in Secrets Manager by RDS (ManageMasterUserPassword).
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  DbEngineVersion:
+    Type: String
+    Default: "16.4"
+  DbName:
+    Type: String
+    Default: appdb
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]{0,62}$'
+  DbMinCapacity:
+    Type: Number
+    Default: 0.5
+  DbMaxCapacity:
+    Type: Number
+    Default: 2
+  DbEnableReader:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+  DbBackupRetentionDays:
+    Type: Number
+    MinValue: 1
+    MaxValue: 35
+    Default: 1
+  EnableDeletionProtection:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+
+Conditions:
+  HasReader: !Equals [!Ref DbEnableReader, "true"]
+
+Resources:
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${InfrastructureName}-${EnvironmentType} Aurora subnets
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet1
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet2
+
+  DbClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: !Sub ${InfrastructureName}-${EnvironmentType} Aurora PostgreSQL parameters
+      Family: !Sub
+        - aurora-postgresql${Major}
+        - Major: !Select [0, !Split [".", !Ref DbEngineVersion]]
+      Parameters:
+        rds.force_ssl: "1"
+        log_min_duration_statement: "1000"
+
+  DbCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: !Ref DbEngineVersion
+      DatabaseName: !Ref DbName
+      MasterUsername: app_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      DBClusterParameterGroupName: !Ref DbClusterParameterGroup
+      VpcSecurityGroupIds:
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DatabaseSecurityGroup
+      StorageEncrypted: true
+      BackupRetentionPeriod: !Ref DbBackupRetentionDays
+      PreferredBackupWindow: "18:00-19:00"            # 01:00-02:00 ICT
+      PreferredMaintenanceWindow: "sun:19:00-sun:20:00"
+      DeletionProtection: !Ref EnableDeletionProtection
+      CopyTagsToSnapshot: true
+      EnableCloudwatchLogsExports:
+        - postgresql
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref DbMinCapacity
+        MaxCapacity: !Ref DbMaxCapacity
+
+  DbWriterInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref DbCluster
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      PromotionTier: 0
+
+  DbReaderInstance:
+    Type: AWS::RDS::DBInstance
+    Condition: HasReader
+    DependsOn: DbWriterInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref DbCluster
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      PromotionTier: 1
+
+Outputs:
+  DbEndpoint:
+    Value: !GetAtt DbCluster.Endpoint.Address
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbEndpoint
+  DbReaderEndpoint:
+    Value: !GetAtt DbCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbReaderEndpoint
+  DbPort:
+    Value: !GetAtt DbCluster.Endpoint.Port
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbPort
+  DbName:
+    Value: !Ref DbName
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbName
+  DbSecretArn:
+    Value: !GetAtt DbCluster.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbSecretArn

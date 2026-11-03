@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Reusable IAM managed policies - one per capability. Each Lambda defines its
+  own role (in its template.yml) and attaches only the policies it needs:
+  share policies, never share roles.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  ItemsTableReadWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${InfrastructureName}-${EnvironmentType}-items-table-rw
+      Description: Read/write the Items DynamoDB table
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:BatchWriteItem
+            Resource:
+              - !ImportValue
+                Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ItemsTableArn
+              - !Sub
+                - ${TableArn}/index/*
+                - TableArn: !ImportValue
+                    Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ItemsTableArn
+
+  ItemsTableReadOnlyPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${InfrastructureName}-${EnvironmentType}-items-table-ro
+      Description: Read-only access to the Items DynamoDB table
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+            Resource:
+              - !ImportValue
+                Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ItemsTableArn
+              - !Sub
+                - ${TableArn}/index/*
+                - TableArn: !ImportValue
+                    Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ItemsTableArn
+
+  DataBucketReadWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${InfrastructureName}-${EnvironmentType}-data-bucket-rw
+      Description: Read/write objects in the data bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource: !ImportValue
+              Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DataBucketArn
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub
+              - ${BucketArn}/*
+              - BucketArn: !ImportValue
+                  Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DataBucketArn
+
+  SecretsReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${InfrastructureName}-${EnvironmentType}-secrets-read
+      Description: Read the database and application secrets
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource:
+              - !ImportValue
+                Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbSecretArn
+              - !ImportValue
+                Fn::Sub: ${InfrastructureName}-${EnvironmentType}-AppSecretArn
+
+  EfsClientPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${InfrastructureName}-${EnvironmentType}-efs-client
+      Description: Mount and write the shared EFS through the Lambda access point
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - elasticfilesystem:ClientMount
+              - elasticfilesystem:ClientWrite
+            Resource: !ImportValue
+              Fn::Sub: ${InfrastructureName}-${EnvironmentType}-FileSystemArn
+            Condition:
+              StringEquals:
+                elasticfilesystem:AccessPointArn: !ImportValue
+                  Fn::Sub: ${InfrastructureName}-${EnvironmentType}-EfsAccessPointArn
+
+Outputs:
+  ItemsTableReadWritePolicy:
+    Value: !Ref ItemsTableReadWritePolicy
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ItemsTableReadWritePolicy
+  ItemsTableReadOnlyPolicy:
+    Value: !Ref ItemsTableReadOnlyPolicy
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ItemsTableReadOnlyPolicy
+  DataBucketReadWritePolicy:
+    Value: !Ref DataBucketReadWritePolicy
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DataBucketReadWritePolicy
+  SecretsReadPolicy:
+    Value: !Ref SecretsReadPolicy
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-SecretsReadPolicy
+  EfsClientPolicy:
+    Value: !Ref EfsClientPolicy
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-EfsClientPolicy

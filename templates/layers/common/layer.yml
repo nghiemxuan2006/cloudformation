@@ -1,0 +1,37 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Lambda layer "common" - shared Python package (python/common: AWS/DB/cache
+  clients, HTTP helpers) + third-party drivers (requirements.txt) + RDS CA bundle.
+  Built into build/layers/common by scripts/build-layers.sh.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  LambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    # Keep old versions so functions can be rolled back to them.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LayerName: !Sub ${InfrastructureName}-${EnvironmentType}-common
+      Description: Shared clients and dependencies
+      # Local path - zipped and uploaded by `aws cloudformation package`
+      Content: ../../../build/layers/common
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - arm64
+
+# Not exported on purpose: every new layer version changes the ARN, and an
+# export cannot change while other stacks import it. scripts/deploy.sh reads
+# this output and passes it to the function stacks as a parameter.
+Outputs:
+  LayerVersionArn:
+    Description: ARN of the current layer version
+    Value: !Ref LambdaLayer

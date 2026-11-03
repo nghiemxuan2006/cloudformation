@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  POST /items - Lambda function (+ its own IAM role) and API Gateway method.
+  Writes the item to DynamoDB, a JSON copy to S3 and an audit line to EFS.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  LambdaFunctionFileName:
+    Type: String
+    Description: Derived from the folder path by scripts/deploy.sh (items-post)
+  ResourceKey:
+    Type: String
+    Description: API resource export suffix (items)
+  HttpMethod:
+    Type: String
+    AllowedValues: [GET, POST, PUT, PATCH, DELETE]
+  CommonLayerArn:
+    Type: String
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+  LambdaTimeout:
+    Type: Number
+    Default: 15
+  LogLevel:
+    Type: String
+    Default: INFO
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${InfrastructureName}-${EnvironmentType}-fn-${LambdaFunctionFileName}
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boundaries/${InfrastructureName}-${EnvironmentType}-boundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ItemsTableReadWritePolicy
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DataBucketReadWritePolicy
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-EfsClientPolicy
+
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      Handler: lambda_function.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      Code: ./src            # zipped & uploaded by `aws cloudformation package`
+      Role: !GetAtt FunctionRole.Arn
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Layers:
+        - !Ref CommonLayerArn
+      LoggingConfig:
+        LogGroup: !Ref FunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref LogLevel
+        SystemLogLevel: WARN
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet1
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet2
+        SecurityGroupIds:
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-LambdaSecurityGroup
+      FileSystemConfigs:
+        - Arn: !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-EfsAccessPointArn
+          LocalMountPath: /mnt/efs
+      Environment:
+        Variables:
+          ENV_TYPE: !Ref EnvironmentType
+          ITEMS_TABLE_NAME: !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ItemsTableName
+          DATA_BUCKET_NAME: !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DataBucketName
+          EFS_MOUNT_PATH: /mnt/efs
+
+  CreateItemModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      Name: CreateItemRequest
+      ContentType: application/json
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: CreateItemRequest
+        type: object
+        required: [name]
+        properties:
+          name:
+            type: string
+            minLength: 1
+            maxLength: 200
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ResourceId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ApiResource-${ResourceKey}
+      HttpMethod: !Ref HttpMethod
+      AuthorizationType: NONE
+      RequestValidatorId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RequestBodyValidator
+      RequestModels:
+        application/json: !Ref CreateItemModel
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        # Points at the "live" alias managed by lambda_function.yml
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}:live/invocations
+
+Outputs:
+  FunctionName:
+    Value: !Ref LambdaFunction

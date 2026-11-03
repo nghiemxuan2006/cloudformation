@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  ElastiCache (Valkey) replication group in the private subnets, encrypted at
+  rest and in transit.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  CacheEngineVersion:
+    Type: String
+    Default: "7.2"
+  CacheNodeType:
+    Type: String
+    Default: cache.t4g.micro
+  CacheNumNodes:
+    Type: Number
+    MinValue: 1
+    MaxValue: 6
+    Default: 1
+
+Conditions:
+  IsMultiNode: !Not [!Equals [!Ref CacheNumNodes, "1"]]
+
+Resources:
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: !Sub ${InfrastructureName}-${EnvironmentType} cache subnets
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet1
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet2
+
+  CacheReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupDescription: !Sub ${InfrastructureName}-${EnvironmentType} cache
+      Engine: valkey
+      EngineVersion: !Ref CacheEngineVersion
+      CacheNodeType: !Ref CacheNodeType
+      NumCacheClusters: !Ref CacheNumNodes
+      AutomaticFailoverEnabled: !If [IsMultiNode, true, false]
+      MultiAZEnabled: !If [IsMultiNode, true, false]
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      SecurityGroupIds:
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheSecurityGroup
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      SnapshotRetentionLimit: !If [IsMultiNode, 3, 0]
+      PreferredMaintenanceWindow: "sun:20:00-sun:21:00"
+
+Outputs:
+  CacheEndpoint:
+    Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
+  CachePort:
+    Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Port
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-CachePort
