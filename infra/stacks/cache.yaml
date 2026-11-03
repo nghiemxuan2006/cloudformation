@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Cache layer - ElastiCache (Valkey) replication group in the private subnets,
+  encrypted at rest and in transit.
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  CacheSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  CacheEngineVersion:
+    Type: String
+  CacheNodeType:
+    Type: String
+  CacheNumNodes:
+    Type: Number
+    MinValue: 1
+    MaxValue: 6
+
+Conditions:
+  IsMultiNode: !Not [!Equals [!Ref CacheNumNodes, '1']]
+
+Resources:
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: !Sub ${ProjectName}-${Environment} cache subnets
+      SubnetIds: !Ref PrivateSubnetIds
+
+  CacheReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupDescription: !Sub ${ProjectName}-${Environment} cache
+      Engine: valkey
+      EngineVersion: !Ref CacheEngineVersion
+      CacheNodeType: !Ref CacheNodeType
+      NumCacheClusters: !Ref CacheNumNodes
+      AutomaticFailoverEnabled: !If [IsMultiNode, true, false]
+      MultiAZEnabled: !If [IsMultiNode, true, false]
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      SecurityGroupIds:
+        - !Ref CacheSecurityGroupId
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      SnapshotRetentionLimit: !If [IsMultiNode, 3, 0]
+      PreferredMaintenanceWindow: 'sun:20:00-sun:21:00'
+
+Outputs:
+  PrimaryEndpointAddress:
+    Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Address
+  PrimaryEndpointPort:
+    Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Port

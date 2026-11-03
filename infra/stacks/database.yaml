@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Database layer - Aurora PostgreSQL Serverless v2. Master credentials are
+  generated and stored in Secrets Manager by RDS (ManageMasterUserPassword).
+
+Parameters:
+  ProjectName:
+    Type: String
+  Environment:
+    Type: String
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  DbEngineVersion:
+    Type: String
+  DbName:
+    Type: String
+  DbMinCapacity:
+    Type: Number
+  DbMaxCapacity:
+    Type: Number
+  DbEnableReader:
+    Type: String
+    AllowedValues: ['true', 'false']
+  DbBackupRetentionDays:
+    Type: Number
+  EnableDeletionProtection:
+    Type: String
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  HasReader: !Equals [!Ref DbEnableReader, 'true']
+
+Resources:
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${ProjectName}-${Environment} Aurora subnets
+      SubnetIds: !Ref PrivateSubnetIds
+
+  DbClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: !Sub ${ProjectName}-${Environment} Aurora PostgreSQL cluster parameters
+      Family: !Sub
+        - aurora-postgresql${Major}
+        - Major: !Select [0, !Split ['.', !Ref DbEngineVersion]]
+      Parameters:
+        rds.force_ssl: '1'
+        log_min_duration_statement: '1000'
+
+  DbCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: !Ref DbEngineVersion
+      DatabaseName: !Ref DbName
+      MasterUsername: app_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      DBClusterParameterGroupName: !Ref DbClusterParameterGroup
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroupId
+      StorageEncrypted: true
+      BackupRetentionPeriod: !Ref DbBackupRetentionDays
+      PreferredBackupWindow: '18:00-19:00'          # 01:00-02:00 ICT
+      PreferredMaintenanceWindow: 'sun:19:00-sun:20:00'
+      DeletionProtection: !Ref EnableDeletionProtection
+      CopyTagsToSnapshot: true
+      EnableCloudwatchLogsExports:
+        - postgresql
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref DbMinCapacity
+        MaxCapacity: !Ref DbMaxCapacity
+
+  DbWriterInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref DbCluster
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      PromotionTier: 0
+
+  DbReaderInstance:
+    Type: AWS::RDS::DBInstance
+    Condition: HasReader
+    DependsOn: DbWriterInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref DbCluster
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      PromotionTier: 1
+
+Outputs:
+  ClusterEndpoint:
+    Value: !GetAtt DbCluster.Endpoint.Address
+  ReaderEndpoint:
+    Value: !GetAtt DbCluster.ReadEndpoint.Address
+  Port:
+    Value: !GetAtt DbCluster.Endpoint.Port
+  DbName:
+    Value: !Ref DbName
+  SecretArn:
+    Value: !GetAtt DbCluster.MasterUserSecret.SecretArn

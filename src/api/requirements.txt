@@ -1,0 +1,6 @@
+# Runtime dependencies bundled into the Lambda package (boto3 is provided by the runtime).
+# Pure-Python drivers -> no native build needed for arm64.
+pg8000==1.31.2
+redis==5.2.1
+# pg8000 pulls python-dateutil; keep it compatible with the runtime's botocore (<3).
+python-dateutil>=2.8,<3
