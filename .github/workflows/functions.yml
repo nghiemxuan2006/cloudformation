@@ -1,0 +1,28 @@
+name: functions
+
+# Non-API Lambdas (templates/lambda-functions/*), e.g. the process-job SQS worker:
+# function + role, then version + "live" alias + trigger.
+on:
+  push:
+    branches: [dev, test, main]
+    paths:
+      - templates/lambda-functions/**
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, test, prod]
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      scope: functions
+      environment: ${{ inputs.environment }}
+      lint-paths: templates/lambda-functions/**/*.yml

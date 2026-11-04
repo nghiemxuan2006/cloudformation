@@ -27,6 +27,12 @@ def s3():
     return _clients["s3"]
 
 
+def sqs():
+    if "sqs" not in _clients:
+        _clients["sqs"] = boto3.client("sqs")
+    return _clients["sqs"]
+
+
 def secrets():
     if "secrets" not in _clients:
         _clients["secrets"] = boto3.client("secretsmanager")

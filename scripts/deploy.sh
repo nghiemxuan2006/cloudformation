@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Deploy one environment, stack by stack, following the templates/ layout.
 #
-# Usage: scripts/deploy.sh <dev|test|prod> [all|infrastructure|layers|api] [stack]
+# Usage: scripts/deploy.sh <dev|test|prod> [all|infrastructure|layers|functions|api] [stack]
 #   stack: only with "infrastructure" - deploy one stack, e.g. `database`
 #          (= templates/infrastructure/database.yml). Used by the per-stack pipelines.
 #
 # Order (later stacks !ImportValue outputs of earlier ones):
-#   1. infrastructure : private-vpc -> storage -> database -> cache -> secrets -> role -> api-gateway
+#   1. infrastructure : private-vpc -> storage -> queue -> database -> cache -> secrets -> role -> api-gateway
 #   2. layers         : templates/layers/<name>/layer.yml
-#   3. api            : for each templates/api-gateways/<api>/
+#   3. functions      : for each templates/lambda-functions/<name>/ (non-API Lambdas, e.g. SQS workers)
+#                         template.yml         (function + role)
+#                         lambda_function.yml  (version + "live" alias + trigger)
+#   4. api            : for each templates/api-gateways/<api>/
 #                         main_template.yml                (API resources)
 #                         <path>/<METHOD>/template.yml       (function + method)
 #                         <path>/<METHOD>/lambda_function.yml (version + "live" alias + permission)
@@ -21,7 +24,7 @@
 #               SKIP_LAYER_BUILD=1 (reuse an existing build/layers)
 set -euo pipefail
 
-ENV_TYPE="${1:?Usage: $0 <dev|test|prod> [all|infrastructure|layers|api]}"
+ENV_TYPE="${1:?Usage: $0 <dev|test|prod> [all|infrastructure|layers|functions|api] [stack]}"
 SCOPE="${2:-all}"
 STACK="${3:-}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -94,7 +97,7 @@ stack_output() {
     --output text
 }
 
-INFRA_STACKS=(private-vpc storage database cache secrets role api-gateway)
+INFRA_STACKS=(private-vpc storage queue database cache secrets role api-gateway)
 
 deploy_infrastructure() {
   local dir="$TEMPLATES/infrastructure"
@@ -120,6 +123,22 @@ deploy_layers() {
     local name
     name="$(basename "$layer_dir")"
     deploy_stack "$layer_dir/layer.yml" "layer-$name"
+  done
+}
+
+# templates/lambda-functions/process-job -> function/stack "fn-process-job"
+deploy_functions() {
+  local layer_arn
+  layer_arn="$(stack_output layer-common LayerVersionArn)"
+  for fn_dir in "$TEMPLATES"/lambda-functions/*/; do
+    fn_dir="${fn_dir%/}"
+    [[ -f "$fn_dir/template.yml" ]] || continue
+    local name
+    name="$(basename "$fn_dir")"
+    deploy_stack "$fn_dir/template.yml" "fn-$name" \
+      "LambdaFunctionFileName=$name" "CommonLayerArn=$layer_arn"
+    deploy_stack "$fn_dir/lambda_function.yml" "fn-$name-alias" \
+      "LambdaFunctionFileName=$name" "CommitHash=$COMMIT_HASH"
   done
 }
 
@@ -183,7 +202,8 @@ fi
 case "$SCOPE" in
   infrastructure) deploy_infrastructure ;;
   layers)         deploy_layers ;;
+  functions)      deploy_functions ;;
   api)            deploy_api ;;
-  all)            deploy_infrastructure; deploy_layers; deploy_api ;;
+  all)            deploy_infrastructure; deploy_layers; deploy_functions; deploy_api ;;
   *) echo "Unknown scope: $SCOPE" >&2; exit 1 ;;
 esac

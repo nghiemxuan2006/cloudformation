@@ -87,3 +87,62 @@ def test_items_get_not_found(fake_clients):
     res = load_function("items/{id}/GET").handler({"pathParameters": {"id": "nope"}}, None)
 
     assert res["statusCode"] == 404
+
+
+# ---- POST /jobs ------------------------------------------------------------
+def test_jobs_post_requires_type():
+    res = load_function("jobs/POST").handler({"body": json.dumps({"payload": {}})}, None)
+    assert res["statusCode"] == 400
+
+
+def test_jobs_post_sends_message_to_queue(monkeypatch, fake_clients):
+    sqs = MagicMock()
+    sqs.send_message.return_value = {"MessageId": "m-1"}
+    fake_clients["sqs"] = sqs
+    monkeypatch.setenv("JOBS_QUEUE_URL", "https://sqs/queue")
+
+    res = load_function("jobs/POST").handler(
+        {"body": json.dumps({"type": "report", "payload": {"month": 10}})}, None
+    )
+
+    assert res["statusCode"] == 202
+    body = _body(res)
+    assert body["status"] == "QUEUED"
+    sent = sqs.send_message.call_args.kwargs
+    assert sent["QueueUrl"] == "https://sqs/queue"
+    message = json.loads(sent["MessageBody"])
+    assert message["jobId"] == body["jobId"]
+    assert message["payload"] == {"month": 10}
+
+
+# ---- process-job (SQS trigger) ---------------------------------------------
+def _sqs_event(*bodies):
+    return {"Records": [{"messageId": f"m-{i}", "body": b} for i, b in enumerate(bodies)]}
+
+
+def test_process_job_writes_result_to_s3(monkeypatch, fake_clients):
+    from conftest import FUNCTIONS_DIR
+
+    s3 = MagicMock()
+    fake_clients["s3"] = s3
+    monkeypatch.setenv("DATA_BUCKET_NAME", "bucket")
+
+    event = _sqs_event(json.dumps({"jobId": "j-1", "type": "report"}))
+    res = load_function("process-job", base=FUNCTIONS_DIR).handler(event, None)
+
+    assert res == {"batchItemFailures": []}
+    put = s3.put_object.call_args.kwargs
+    assert put["Key"] == "jobs/j-1.json"
+    assert json.loads(put["Body"])["status"] == "DONE"
+
+
+def test_process_job_reports_only_failed_records(monkeypatch, fake_clients):
+    from conftest import FUNCTIONS_DIR
+
+    fake_clients["s3"] = MagicMock()
+    monkeypatch.setenv("DATA_BUCKET_NAME", "bucket")
+
+    event = _sqs_event(json.dumps({"jobId": "ok", "type": "report"}), "{not json", "{}")
+    res = load_function("process-job", base=FUNCTIONS_DIR).handler(event, None)
+
+    assert res == {"batchItemFailures": [{"itemIdentifier": "m-1"}, {"itemIdentifier": "m-2"}]}

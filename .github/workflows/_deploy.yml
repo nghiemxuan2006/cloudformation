@@ -11,7 +11,7 @@ on:
   workflow_call:
     inputs:
       scope:
-        description: all | infrastructure | layers | api
+        description: all | infrastructure | layers | functions | api
         type: string
         required: true
       stack:
@@ -64,8 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     # One deployment at a time per (environment, stack). Different stacks of the
-    # same environment run in parallel; the "api" group is shared by the api and
-    # layers pipelines so they never deploy functions at the same time.
+    # same environment run in parallel; the "api" and "functions" groups are
+    # shared with the layers pipeline so the same stacks never deploy twice at once.
     concurrency:
       group: deploy-${{ needs.resolve.outputs.environment }}-${{ inputs.stack || inputs.scope }}
       cancel-in-progress: false
@@ -94,7 +94,7 @@ jobs:
           cfn-lint ${{ inputs.lint-paths }}
 
       - name: Unit tests
-        if: inputs.scope == 'api' || inputs.scope == 'layers' || inputs.scope == 'all'
+        if: inputs.scope != 'infrastructure'
         run: pytest -q
 
       - name: Configure AWS credentials (OIDC)

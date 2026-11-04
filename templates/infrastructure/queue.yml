@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Jobs queue: POST /jobs sends a message, the process-job Lambda consumes it
+  (event source mapping in templates/lambda-functions/process-job). Messages
+  that fail JobsMaxReceiveCount times move to the dead-letter queue.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  JobsVisibilityTimeout:
+    Type: Number
+    Default: 360
+    Description: >
+      Seconds a received message stays hidden. AWS recommends at least 6x the
+      consumer Lambda timeout (process-job WorkerTimeout, 60s by default).
+  JobsMaxReceiveCount:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    Description: Attempts before a message is moved to the dead-letter queue
+  JobsRetentionSeconds:
+    Type: Number
+    Default: 345600   # 4 days
+    MinValue: 60
+    MaxValue: 1209600
+
+Resources:
+  JobsDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${InfrastructureName}-${EnvironmentType}-jobs-dlq
+      MessageRetentionPeriod: 1209600   # 14 days - the maximum, time to investigate
+      SqsManagedSseEnabled: true
+
+  JobsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${InfrastructureName}-${EnvironmentType}-jobs
+      VisibilityTimeout: !Ref JobsVisibilityTimeout
+      MessageRetentionPeriod: !Ref JobsRetentionSeconds
+      ReceiveMessageWaitTimeSeconds: 20   # long polling
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt JobsDeadLetterQueue.Arn
+        maxReceiveCount: !Ref JobsMaxReceiveCount
+
+  # Reject any request that is not over TLS.
+  JobsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref JobsQueue
+        - !Ref JobsDeadLetterQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: sqs:*
+            Resource:
+              - !GetAtt JobsQueue.Arn
+              - !GetAtt JobsDeadLetterQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # Anything in the DLQ means a job failed every retry.
+  JobsDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${InfrastructureName}-${EnvironmentType}-jobs-dlq-not-empty
+      AlarmDescription: Messages in the jobs dead-letter queue
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt JobsDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  JobsQueueUrl:
+    Value: !Ref JobsQueue
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-JobsQueueUrl
+  JobsQueueArn:
+    Value: !GetAtt JobsQueue.Arn
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-JobsQueueArn
+  JobsDeadLetterQueueArn:
+    Value: !GetAtt JobsDeadLetterQueue.Arn
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-JobsDeadLetterQueueArn

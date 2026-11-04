@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Publishes a new version of the worker for every commit, points the "live"
+  alias at it and attaches the SQS trigger to the alias - so rolling back the
+  alias also rolls back what consumes the queue.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  LambdaFunctionFileName:
+    Type: String
+  CommitHash:
+    Type: String
+  WorkerBatchSize:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 10000
+  WorkerBatchingWindowSeconds:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 300
+  WorkerMaxConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: 2
+    Description: Upper bound of concurrent invocations the queue can trigger
+
+Resources:
+  LambdaVersion:
+    Type: AWS::Lambda::Version
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      Description: !Ref CommitHash   # changes every commit -> new version
+
+  LambdaAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      FunctionVersion: !GetAtt LambdaVersion.Version
+      Name: live
+      Description: !Ref CommitHash
+
+  SqsTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      FunctionName: !Ref LambdaAlias
+      EventSourceArn: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-JobsQueueArn
+      BatchSize: !Ref WorkerBatchSize
+      MaximumBatchingWindowInSeconds: !Ref WorkerBatchingWindowSeconds
+      # The handler returns the failed message ids; only those are retried.
+      FunctionResponseTypes: [ReportBatchItemFailures]
+      ScalingConfig:
+        MaximumConcurrency: !Ref WorkerMaxConcurrency
+      Enabled: true
+
+Outputs:
+  LiveVersion:
+    Value: !GetAtt LambdaVersion.Version
+  EventSourceMappingId:
+    Value: !Ref SqsTrigger

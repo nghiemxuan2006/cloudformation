@@ -2,12 +2,14 @@
 
 Client → **API Gateway (REST)** → **Lambda** (mỗi endpoint/method một function, chạy trong private subnet) → EFS, Aurora PostgreSQL Serverless v2, ElastiCache (Valkey), DynamoDB, S3, Secrets Manager.
 
+Xử lý bất đồng bộ: `POST /jobs` → **SQS** (`jobs`, kèm DLQ) → Lambda **process-job** (trigger bằng event source mapping) → S3.
+
 VPC **không có NAT Gateway**. Lambda gọi các dịch vụ AWS hoàn toàn qua đường private:
 
 | Dịch vụ | Cách Lambda kết nối |
 |---|---|
 | S3, DynamoDB | Gateway VPC Endpoint (miễn phí) |
-| Secrets Manager | Interface VPC Endpoint (PrivateLink) |
+| Secrets Manager, SQS | Interface VPC Endpoint (PrivateLink) |
 | Aurora, ElastiCache, EFS | Nằm trong cùng private subnet, kiểm soát bằng Security Group |
 
 > Sơ đồ vẽ "Endpoint" cho ElastiCache, nhưng ElastiCache không có VPC endpoint kiểu PrivateLink cho data plane. Cluster được đặt thẳng trong private subnet, và Lambda kết nối qua Security Group (port 6379, có TLS).
@@ -22,11 +24,17 @@ Theo cùng quy ước với `cfn101-workshop/templates`: các stack độc lập
 │   ├── infrastructure/              # Stack nền, mỗi file một stack, deploy theo thứ tự từ trên xuống
 │   │   ├── private-vpc.yml          #   VPC, subnet, security group, VPC endpoint, flow logs
 │   │   ├── storage.yml              #   S3, DynamoDB, EFS (+ mount target, access point)
+│   │   ├── queue.yml                #   SQS jobs + dead-letter queue + alarm khi DLQ có message
 │   │   ├── database.yml             #   Aurora PostgreSQL Serverless v2 (secret do RDS quản lý)
 │   │   ├── cache.yml                #   ElastiCache Valkey (TLS)
 │   │   ├── secrets.yml              #   Secret của ứng dụng
 │   │   ├── role.yml                 #   IAM managed policy dùng chung (mỗi policy một năng lực)
 │   │   └── api-gateway.yml          #   REST API + request validator
+│   ├── lambda-functions/            # Lambda không thuộc API (worker, trigger từ SQS/EventBridge…)
+│   │   └── process-job/
+│   │       ├── template.yml         #   function + IAM role riêng
+│   │       ├── lambda_function.yml  #   version + alias "live" + SQS trigger (event source mapping)
+│   │       └── src/lambda_function.py
 │   ├── layers/
 │   │   └── common/
 │   │       ├── layer.yml            #   Lambda layer
@@ -45,6 +53,9 @@ Theo cùng quy ước với `cfn101-workshop/templates`: các stack độc lập
 │           ├── main_template.yml    #   resource /items, /items/{id}
 │           ├── POST/                #   POST /items
 │           └── {id}/GET/            #   GET /items/{id}
+│       └── jobs/
+│           ├── main_template.yml    #   resource /jobs
+│           └── POST/                #   POST /jobs → gửi message vào SQS
 ├── parameters/                      # Cấu hình riêng mỗi môi trường: dev.json, test.json, prod.json
 ├── bootstrap/bootstrap.yml          # Chạy 1 lần/môi trường: artifact bucket, OIDC, IAM cho CI/CD
 ├── scripts/
@@ -55,7 +66,8 @@ Theo cùng quy ước với `cfn101-workshop/templates`: các stack độc lập
     ├── ci.yml                       # PR: lint + test + build
     ├── _deploy.yml                  # reusable: env theo nhánh, lint, OIDC, deploy.sh, smoke test
     ├── infra-<stack>.yml            # 1 pipeline / 1 stack cố định trong templates/infrastructure
-    ├── layers.yml                   # layers → api
+    ├── layers.yml                   # layers → functions + api
+    ├── functions.yml                # lambda-functions/**
     ├── api.yml                      # api-gateways/**
     └── deploy-all.yml               # thủ công: tạo môi trường mới theo đúng thứ tự
 ```
@@ -79,6 +91,12 @@ Theo cùng quy ước với `cfn101-workshop/templates`: các stack độc lập
 3. Viết `src/lambda_function.py`.
 
 Pipeline sẽ tự phát hiện thư mục mới, rồi đặt tên và deploy `myapp-<env>-fn-items-id-delete`. Nếu cần một path mới, thêm resource vào `main_template.yml` của API đó và export với tên `ApiResource-<key>`.
+
+### Thêm một Lambda không thuộc API (worker)
+
+1. Tạo `templates/lambda-functions/<tên>/`, copy 3 file từ `process-job/`.
+2. Trong `lambda_function.yml`, đổi trigger (`EventSourceMapping` cho SQS/Kinesis/DynamoDB Streams, `AWS::Events::Rule` + `AWS::Lambda::Permission` cho EventBridge…).
+3. Pipeline `functions` sẽ deploy thành stack `myapp-<env>-fn-<tên>` và `…-fn-<tên>-alias`.
 
 ### Khác với workshop gốc ở đâu, và vì sao
 
@@ -109,20 +127,23 @@ Mỗi stack có pipeline riêng. Pipeline chỉ chạy khi file của nó thay �
 |---|---|---|
 | `infra / private-vpc` | `templates/infrastructure/private-vpc.yml`, `parameters/**` | `<infra>-<env>-private-vpc` |
 | `infra / storage` | `.../storage.yml`, `parameters/**` | `<infra>-<env>-storage` |
+| `infra / queue` | `.../queue.yml`, `parameters/**` | `<infra>-<env>-queue` |
 | `infra / database` | `.../database.yml`, `parameters/**` | `<infra>-<env>-database` |
 | `infra / cache` | `.../cache.yml`, `parameters/**` | `<infra>-<env>-cache` |
 | `infra / secrets` | `.../secrets.yml`, `parameters/**` | `<infra>-<env>-secrets` |
 | `infra / role` | `.../role.yml`, `parameters/**` | `<infra>-<env>-role` |
 | `infra / api-gateway` | `.../api-gateway.yml`, `parameters/**` | `<infra>-<env>-api-gateway` |
-| `layers` | `templates/layers/**`, `scripts/build-layers.sh` | layers, rồi api (function cần ARN của layer mới) |
+| `layers` | `templates/layers/**`, `scripts/build-layers.sh` | layers, rồi functions + api (function cần ARN của layer mới) |
+| `functions` | `templates/lambda-functions/**` | function, alias, trigger |
 | `api` | `templates/api-gateways/**` | resource, function, alias, stage + smoke test |
 | `deploy-all` | chỉ chạy thủ công | toàn bộ, theo thứ tự phụ thuộc |
 
 Ghi chú:
+- Bảng trên có 8 pipeline infra, tính cả `queue`.
 - Tất cả pipeline gọi chung `_deploy.yml`. Logic (map nhánh → môi trường, OIDC, deploy) chỉ nằm ở một chỗ, file pipeline của từng stack chỉ khoảng 30 dòng.
 - Mỗi cặp (môi trường, stack) chỉ có một lần deploy tại một thời điểm, còn các stack khác nhau thì chạy song song. Pipeline `api` và job api của `layers` dùng chung một concurrency group nên không bao giờ deploy function cùng lúc.
-- `parameters/<env>.json` dùng chung, nên sửa file này sẽ chạy cả 7 pipeline infra. Stack nào không có tham số thay đổi sẽ kết thúc với changeset rỗng (no-op).
-- Khi tạo môi trường **mới**, chạy `deploy-all` (scope `all`), vì các stack import export của nhau theo thứ tự `private-vpc → storage → database → cache → secrets → role → api-gateway → layers → api`. Sau đó mới dùng pipeline riêng của từng stack.
+- `parameters/<env>.json` dùng chung, nên sửa file này sẽ chạy cả 8 pipeline infra. Stack nào không có tham số thay đổi sẽ kết thúc với changeset rỗng (no-op).
+- Khi tạo môi trường **mới**, chạy `deploy-all` (scope `all`), vì các stack import export của nhau theo thứ tự `private-vpc → storage → queue → database → cache → secrets → role → api-gateway → layers → functions → api`. Sau đó mới dùng pipeline riêng của từng stack.
 - Sửa `scripts/deploy.sh` không kích hoạt pipeline nào. Muốn áp dụng thì chạy `deploy-all`.
 - Mỗi pipeline đều có `workflow_dispatch` để chạy lại một stack cho một môi trường bất kỳ.
 
@@ -182,6 +203,7 @@ make lint test
 export ARTIFACT_BUCKET=myapp-dev-artifacts-<account>-<region>
 make deploy ENV=dev                 # toàn bộ
 make deploy ENV=dev SCOPE=api       # chỉ API (resource, function, alias, stage)
+make deploy ENV=dev SCOPE=functions # chỉ lambda-functions (worker SQS…)
 make deploy ENV=dev SCOPE=infrastructure STACK=database   # 1 stack infra
 ```
 
@@ -195,7 +217,35 @@ curl $API/health                                   # Lambda sống
 curl $API/health/deps                              # Kiểm tra Aurora, ElastiCache, EFS
 curl -X POST $API/items -H 'Content-Type: application/json' -d '{"name":"book"}'
 curl $API/items/<id>                               # Lần 1 đọc từ dynamodb, lần 2 đọc từ cache
+curl -X POST $API/jobs -H 'Content-Type: application/json' \
+  -d '{"type":"report","payload":{"month":10}}'    # 202 + jobId
+aws s3 cp s3://myapp-dev-data-<account>-<region>/jobs/<jobId>.json -   # kết quả do process-job ghi
 ```
+
+### Luồng SQS
+
+- **Cấu hình xử lý lỗi:**
+  - `process-job` trả về `batchItemFailures`, nên SQS chỉ gửi lại những message bị lỗi.
+  - Sau `JobsMaxReceiveCount` lần (mặc định 3), message chuyển sang `myapp-<env>-jobs-dlq` và alarm `myapp-<env>-jobs-dlq-not-empty` chuyển sang ALARM.
+- **Đưa message trong DLQ về lại queue chính:**
+  ```bash
+  aws sqs start-message-move-task --source-arn <JobsDeadLetterQueueArn>
+  ```
+  Lệnh này nên chạy sau khi đã sửa lỗi.
+- **Trigger gắn trên alias `live`:**
+  - Rollback alias thì phần consume queue cũng rollback theo.
+  - Muốn tạm dừng xử lý thì đặt `Enabled: false` cho `SqsTrigger`.
+- **Tham số có thể chỉnh:**
+
+  | Tham số | Mặc định | Nằm trong |
+  |---|---|---|
+  | `WorkerBatchSize` | 10 | `process-job/lambda_function.yml` |
+  | `WorkerMaxConcurrency` | 5 | `process-job/lambda_function.yml` |
+  | `WorkerTimeout` | 60s | `process-job/template.yml` |
+  | `JobsVisibilityTimeout` | 360s | `queue.yml` |
+
+  `JobsVisibilityTimeout` phải ≥ 6 × `WorkerTimeout`. Muốn đặt giá trị khác cho từng môi trường thì thêm key vào `parameters/<env>.json`.
+- **Viết worker idempotent:** SQS giao message *ít nhất một lần*, nên cùng một job có thể chạy hai lần. Worker này ghi theo key `jobs/<jobId>.json`, nên nếu job chạy lại thì chỉ ghi đè, không tạo bản trùng.
 
 **Rollback một function:** trỏ alias `live` về version cũ.
 
@@ -216,16 +266,18 @@ GitHub Actions ──OIDC──▶ bootstrap/<infra>-<env>-github-deploy   (chan
 ```
 
 1. **Tách người gọi và người thực thi.** Role của GitHub không có quyền tạo resource. Nó chỉ ra lệnh cho CloudFormation.
-2. **`cfn-exec` có quyền giới hạn.** Lambda, layer, log group, S3, DynamoDB, secret, IAM bị giới hạn theo tên `<infra>-<env>-*`. Các dịch vụ có ID tự sinh (EC2, RDS, ElastiCache, EFS, API Gateway) bị giới hạn theo region.
+2. **`cfn-exec` có quyền giới hạn.** Lambda, layer, log group, S3, DynamoDB, SQS, CloudWatch alarm, secret, IAM bị giới hạn theo tên `<infra>-<env>-*`. Các dịch vụ có ID tự sinh (EC2, RDS, ElastiCache, EFS, API Gateway) bị giới hạn theo region.
 3. **Permissions boundary.** `cfn-exec` chỉ tạo được role khi role đó có gắn boundary, và role/policy của bootstrap (path `/bootstrap/`) bị Deny tường minh. Vì vậy pipeline không thể tự nâng quyền.
 
-**Dùng chung policy, không dùng chung role.** `templates/infrastructure/role.yml` export các managed policy nhỏ: `ItemsTableReadWritePolicy`, `ItemsTableReadOnlyPolicy`, `DataBucketReadWritePolicy`, `SecretsReadPolicy`, `EfsClientPolicy`. Mỗi `template.yml` tự tạo role cho function của mình và chỉ gắn những policy cần dùng:
+**Dùng chung policy, không dùng chung role.** `templates/infrastructure/role.yml` export các managed policy nhỏ: `ItemsTableReadWritePolicy`, `ItemsTableReadOnlyPolicy`, `DataBucketReadWritePolicy`, `SecretsReadPolicy`, `EfsClientPolicy`, `JobsQueueSendPolicy`, `JobsQueueConsumePolicy`. Mỗi `template.yml` tự tạo role cho function của mình và chỉ gắn những policy cần dùng:
 
 | Function | Policy |
 |---|---|
 | `health-get` | `AWSLambdaBasicExecutionRole` (không vào VPC) |
 | `health-deps-get` | VPC access, `SecretsReadPolicy`, `EfsClientPolicy` |
 | `items-post` | VPC access, `ItemsTableReadWritePolicy`, `DataBucketReadWritePolicy`, `EfsClientPolicy` |
+| `jobs-post` | VPC access, `JobsQueueSendPolicy` |
+| `process-job` | VPC access, `JobsQueueConsumePolicy`, `DataBucketReadWritePolicy` |
 | `items-id-get` | VPC access, `ItemsTableReadOnlyPolicy` |
 
 ## Khác biệt giữa các môi trường (`parameters/*.json`)
@@ -243,7 +295,7 @@ Mọi stack đều nhận toàn bộ file parameter. `aws cloudformation deploy`
 
 ## Lưu ý vận hành
 
-- **Thứ tự xoá ngược với thứ tự tạo.** Không xoá được một stack khi còn stack khác đang `!ImportValue` output của nó. Thứ tự xoá: stage → function/alias → `api-*` → layer → `api-gateway` → `role` → `secrets` → `cache` → `database` → `storage` → `private-vpc`.
+- **Thứ tự xoá ngược với thứ tự tạo.** Không xoá được một stack khi còn stack khác đang `!ImportValue` output của nó. Thứ tự xoá: stage → function/alias (kể cả `fn-process-job*`) → `api-*` → layer → `api-gateway` → `role` → `secrets` → `cache` → `database` → `queue` → `storage` → `private-vpc`.
 - **Dữ liệu được giữ lại.** S3 bucket và DynamoDB table dùng `Retain`, Aurora dùng `Snapshot`. Bucket và table có tên cố định, nên sau khi xoá stack phải xoá tay chúng thì mới tạo lại được.
 - **Thêm dịch vụ AWS mới.** Phải bổ sung quyền vào `CfnExecInfraPolicy` **và** `WorkloadPermissionsBoundary` trong `bootstrap/bootstrap.yml`, rồi deploy lại bootstrap bằng credential admin.
 - **Production.** Nên thêm RDS Proxy, WAF và custom domain cho API, cùng CloudWatch alarms.

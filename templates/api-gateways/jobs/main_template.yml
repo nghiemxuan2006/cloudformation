@@ -1,0 +1,27 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  API resource for /jobs. Methods live in the sub-folders (POST/).
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  JobsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ParentId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiRootResourceId
+      PathPart: jobs
+
+Outputs:
+  JobsResource:
+    Value: !Ref JobsResource
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-ApiResource-jobs

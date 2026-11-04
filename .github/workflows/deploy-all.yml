@@ -1,8 +1,8 @@
 name: deploy-all
 
 # Manual only. Deploys stacks in dependency order:
-#   private-vpc -> storage -> database -> cache -> secrets -> role -> api-gateway
-#   -> layers -> api
+#   private-vpc -> storage -> queue -> database -> cache -> secrets -> role
+#   -> api-gateway -> layers -> functions -> api
 # Use it to create a new environment (the per-stack pipelines assume the stacks
 # they import from already exist) or to redeploy everything after changing scripts/.
 on:
@@ -16,7 +16,7 @@ on:
       scope:
         description: What to deploy
         type: choice
-        options: [all, infrastructure, layers, api]
+        options: [all, infrastructure, layers, functions, api]
         default: all
 
 permissions:

@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-AWS_REGION ?= ap-southeast-1
+AWS_REGION ?= us-west-1
 INFRA      ?= myapp
 SCOPE      ?= all
 
@@ -9,7 +9,7 @@ help:
 	@echo "make lint                                 - cfn-lint all templates"
 	@echo "make test                                 - unit tests for every function"
 	@echo "make build                                - build Lambda layers into build/layers"
-	@echo "make deploy ENV=dev [SCOPE=all|infrastructure|layers|api] [STACK=database]  (needs ARTIFACT_BUCKET)"
+	@echo "make deploy ENV=dev [SCOPE=all|infrastructure|layers|functions|api] [STACK=database]  (needs ARTIFACT_BUCKET)"
 	@echo "make bootstrap ENV=dev GITHUB_ORG=x GITHUB_REPO=y [SINGLETONS=false]"
 
 lint:

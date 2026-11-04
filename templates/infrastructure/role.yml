@@ -115,6 +115,37 @@ Resources:
                 elasticfilesystem:AccessPointArn: !ImportValue
                   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-EfsAccessPointArn
 
+  JobsQueueSendPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${InfrastructureName}-${EnvironmentType}-jobs-queue-send
+      Description: Send messages to the jobs queue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !ImportValue
+              Fn::Sub: ${InfrastructureName}-${EnvironmentType}-JobsQueueArn
+
+  # Used by the Lambda event source mapping, which polls with the function's role.
+  JobsQueueConsumePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${InfrastructureName}-${EnvironmentType}-jobs-queue-consume
+      Description: Receive and delete messages from the jobs queue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:ChangeMessageVisibility
+              - sqs:GetQueueAttributes
+            Resource: !ImportValue
+              Fn::Sub: ${InfrastructureName}-${EnvironmentType}-JobsQueueArn
+
 Outputs:
   ItemsTableReadWritePolicy:
     Value: !Ref ItemsTableReadWritePolicy
@@ -136,3 +167,11 @@ Outputs:
     Value: !Ref EfsClientPolicy
     Export:
       Name: !Sub ${InfrastructureName}-${EnvironmentType}-EfsClientPolicy
+  JobsQueueSendPolicy:
+    Value: !Ref JobsQueueSendPolicy
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-JobsQueueSendPolicy
+  JobsQueueConsumePolicy:
+    Value: !Ref JobsQueueConsumePolicy
+    Export:
+      Name: !Sub ${InfrastructureName}-${EnvironmentType}-JobsQueueConsumePolicy

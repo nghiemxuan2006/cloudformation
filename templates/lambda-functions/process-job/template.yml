@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  process-job - worker Lambda (+ its own IAM role) triggered by the jobs SQS
+  queue. The trigger (event source mapping) is on the "live" alias, in
+  lambda_function.yml. Writes each job's result to s3://<data-bucket>/jobs/<jobId>.json.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  LambdaFunctionFileName:
+    Type: String
+    Description: Folder name under templates/lambda-functions (process-job)
+  CommonLayerArn:
+    Type: String
+  WorkerMemorySize:
+    Type: Number
+    Default: 512
+  WorkerTimeout:
+    Type: Number
+    Default: 60
+    Description: Keep the queue's JobsVisibilityTimeout >= 6x this value
+  LogLevel:
+    Type: String
+    Default: INFO
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${InfrastructureName}-${EnvironmentType}-fn-${LambdaFunctionFileName}
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boundaries/${InfrastructureName}-${EnvironmentType}-boundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-JobsQueueConsumePolicy
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DataBucketReadWritePolicy
+
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      Handler: lambda_function.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      Code: ./src            # zipped & uploaded by `aws cloudformation package`
+      Role: !GetAtt FunctionRole.Arn
+      MemorySize: !Ref WorkerMemorySize
+      Timeout: !Ref WorkerTimeout
+      Layers:
+        - !Ref CommonLayerArn
+      LoggingConfig:
+        LogGroup: !Ref FunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref LogLevel
+        SystemLogLevel: WARN
+      # SQS polling is done by the Lambda service, so no SQS endpoint is needed
+      # here; S3 is reached through the gateway endpoint.
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet1
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet2
+        SecurityGroupIds:
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-LambdaSecurityGroup
+      Environment:
+        Variables:
+          ENV_TYPE: !Ref EnvironmentType
+          DATA_BUCKET_NAME: !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DataBucketName
+
+Outputs:
+  FunctionName:
+    Value: !Ref LambdaFunction

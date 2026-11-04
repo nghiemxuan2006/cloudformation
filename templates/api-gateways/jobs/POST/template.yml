@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  POST /jobs - Lambda function (+ its own IAM role) and API Gateway method.
+  Puts the job on the jobs SQS queue and answers 202; the process-job Lambda
+  (templates/lambda-functions/process-job) does the work asynchronously.
+
+Parameters:
+  InfrastructureName:
+    Type: String
+  EnvironmentType:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  LambdaFunctionFileName:
+    Type: String
+    Description: Derived from the folder path by scripts/deploy.sh (jobs-post)
+  ResourceKey:
+    Type: String
+    Description: API resource export suffix (jobs)
+  HttpMethod:
+    Type: String
+    AllowedValues: [GET, POST, PUT, PATCH, DELETE]
+  CommonLayerArn:
+    Type: String
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+  LambdaTimeout:
+    Type: Number
+    Default: 15
+  LogLevel:
+    Type: String
+    Default: INFO
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Resources:
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${InfrastructureName}-${EnvironmentType}-fn-${LambdaFunctionFileName}
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/boundaries/${InfrastructureName}-${EnvironmentType}-boundary
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - !ImportValue
+          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-JobsQueueSendPolicy
+
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      RetentionInDays: !Ref LogRetentionDays
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${InfrastructureName}-${EnvironmentType}-${LambdaFunctionFileName}
+      Handler: lambda_function.handler
+      Runtime: python3.12
+      Architectures: [arm64]
+      Code: ./src            # zipped & uploaded by `aws cloudformation package`
+      Role: !GetAtt FunctionRole.Arn
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Layers:
+        - !Ref CommonLayerArn
+      LoggingConfig:
+        LogGroup: !Ref FunctionLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: !Ref LogLevel
+        SystemLogLevel: WARN
+      VpcConfig:   # reaches SQS through the interface endpoint in private-vpc.yml
+        SubnetIds:
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet1
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet2
+        SecurityGroupIds:
+          - !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-LambdaSecurityGroup
+      Environment:
+        Variables:
+          ENV_TYPE: !Ref EnvironmentType
+          JOBS_QUEUE_URL: !ImportValue
+            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-JobsQueueUrl
+
+  CreateJobModel:
+    Type: AWS::ApiGateway::Model
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      Name: CreateJobRequest
+      ContentType: application/json
+      Schema:
+        $schema: http://json-schema.org/draft-04/schema#
+        title: CreateJobRequest
+        type: object
+        required: [type]
+        properties:
+          type:
+            type: string
+            minLength: 1
+            maxLength: 100
+          payload:
+            type: object
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RestApiId
+      ResourceId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ApiResource-${ResourceKey}
+      HttpMethod: !Ref HttpMethod
+      AuthorizationType: NONE
+      RequestValidatorId: !ImportValue
+        Fn::Sub: ${InfrastructureName}-${EnvironmentType}-RequestBodyValidator
+      RequestModels:
+        application/json: !Ref CreateJobModel
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        # Points at the "live" alias managed by lambda_function.yml
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}:live/invocations
+
+Outputs:
+  FunctionName:
+    Value: !Ref LambdaFunction
