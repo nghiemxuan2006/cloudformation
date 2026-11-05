@@ -48,12 +48,29 @@ Resources:
         deadLetterTargetArn: !GetAtt JobsDeadLetterQueue.Arn
         maxReceiveCount: !Ref JobsMaxReceiveCount
 
-  # Reject any request that is not over TLS.
+  # Reject any request that is not over TLS. SQS requires exactly one resource
+  # per statement, and a policy is attached per queue - so one policy each.
   JobsQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
         - !Ref JobsQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: sqs:*
+            Resource: !GetAtt JobsQueue.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  JobsDeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
         - !Ref JobsDeadLetterQueue
       PolicyDocument:
         Version: "2012-10-17"
@@ -62,9 +79,7 @@ Resources:
             Effect: Deny
             Principal: "*"
             Action: sqs:*
-            Resource:
-              - !GetAtt JobsQueue.Arn
-              - !GetAtt JobsDeadLetterQueue.Arn
+            Resource: !GetAtt JobsDeadLetterQueue.Arn
             Condition:
               Bool:
                 aws:SecureTransport: "false"

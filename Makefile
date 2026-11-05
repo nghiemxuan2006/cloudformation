@@ -10,7 +10,7 @@ help:
 	@echo "make test                                 - unit tests for every function"
 	@echo "make build                                - build Lambda layers into build/layers"
 	@echo "make deploy ENV=dev [SCOPE=all|infrastructure|layers|functions|api] [STACK=database]  (needs ARTIFACT_BUCKET)"
-	@echo "make bootstrap ENV=dev GITHUB_ORG=x GITHUB_REPO=y [SINGLETONS=false]"
+	@echo "make bootstrap ENV=dev GITHUB_ORG=x GITHUB_REPO=y [GITHUB_OWNER_ID=n GITHUB_REPO_ID=n] [SINGLETONS=false]"
 
 lint:
 	cfn-lint
@@ -35,6 +35,7 @@ bootstrap:
 	  --parameter-overrides \
 	    InfrastructureName=$(INFRA) EnvironmentType=$(ENV) \
 	    GitHubOrg=$(GITHUB_ORG) GitHubRepo=$(GITHUB_REPO) \
+	    GitHubOwnerId=$(GITHUB_OWNER_ID) GitHubRepoId=$(GITHUB_REPO_ID) \
 	    CreateAccountSingletons=$(or $(SINGLETONS),true)
 	aws cloudformation describe-stacks --region $(AWS_REGION) \
 	  --stack-name bootstrap-$(INFRA)-$(ENV) --query 'Stacks[0].Outputs' --output table

@@ -175,6 +175,14 @@ Bước này tạo stack `bootstrap-<infra>-<env>`, gồm:
 
 Ngoài ra còn có các **resource cấp account**: GitHub OIDC provider, và CloudWatch role cho API Gateway (bắt buộc để stage REST ghi access log). Mỗi account chỉ có một bộ này, nên các môi trường dùng chung account phải đặt `SINGLETONS=false`.
 
+**OIDC subject có ID.** Với một số owner/repo, GitHub gửi claim `sub` dạng `repo:<owner>@<ownerId>/<repo>@<repoId>:environment:<env>` thay vì `repo:<owner>/<repo>:environment:<env>`. Khi đó GitHub Actions báo `Not authorized to perform sts:AssumeRoleWithWebIdentity`. Cách xử lý: truyền thêm ID khi bootstrap.
+
+```bash
+make bootstrap ENV=dev GITHUB_ORG=<org> GITHUB_REPO=<repo> GITHUB_OWNER_ID=<id> GITHUB_REPO_ID=<id>
+```
+
+Lấy ID bằng `curl https://api.github.com/repos/<org>/<repo>` (`.owner.id`, `.id`), hoặc xem trường `userName` của event `AssumeRoleWithWebIdentity` bị từ chối trong CloudTrail. Trust policy sẽ chấp nhận cả hai dạng.
+
 ### 3. GitHub Environments
 
 Vào **Settings → Environments**, tạo `dev`, `test`, `prod`. Mỗi environment cần các **Variables** sau, lấy từ output của bootstrap:

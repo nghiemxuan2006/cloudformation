@@ -20,6 +20,20 @@ Parameters:
   GitHubRepo:
     Type: String
     Description: Repository name (without org)
+  GitHubOwnerId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[0-9]*$'
+    Description: >-
+      Numeric ID of the GitHub owner. Required when GitHub issues OIDC subjects
+      in the immutable-ID format repo:<owner>@<ownerId>/<repo>@<repoId>:...
+      (see the "userName" of a failed AssumeRoleWithWebIdentity in CloudTrail,
+      or `curl https://api.github.com/repos/<owner>/<repo>` -> .owner.id).
+  GitHubRepoId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[0-9]*$'
+    Description: Numeric ID of the GitHub repository (GitHub API -> .id)
   CreateAccountSingletons:
     Type: String
     AllowedValues: ['true', 'false']
@@ -31,6 +45,9 @@ Parameters:
 
 Conditions:
   ShouldCreateAccountSingletons: !Equals [!Ref CreateAccountSingletons, 'true']
+  HasGitHubIds: !And
+    - !Not [!Equals [!Ref GitHubOwnerId, '']]
+    - !Not [!Equals [!Ref GitHubRepoId, '']]
 
 Resources:
   GitHubOidcProvider:
@@ -443,8 +460,14 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                # Only jobs running in the matching GitHub Environment may assume this role
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${EnvironmentType}
+                # Only jobs running in the matching GitHub Environment may assume this role.
+                # GitHub sends either the name-only subject or, for newer repos/owners,
+                # the immutable-ID subject (survives renames, blocks repo re-squatting).
+                token.actions.githubusercontent.com:sub: !If
+                  - HasGitHubIds
+                  - - !Sub repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:environment:${EnvironmentType}
+                    - !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${EnvironmentType}
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${EnvironmentType}
       Policies:
         - PolicyName: deploy
           PolicyDocument:
