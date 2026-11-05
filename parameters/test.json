@@ -3,7 +3,7 @@
     "InfrastructureName": "myapp",
     "EnvironmentType": "test",
     "VpcCIDR": "10.20.0.0/16",
-    "DbEngineVersion": "16.4",
+    "DbEngineVersion": "16.15",
     "DbName": "appdb",
     "DbMinCapacity": "0.5",
     "DbMaxCapacity": "4",

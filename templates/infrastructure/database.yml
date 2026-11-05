@@ -12,7 +12,7 @@ Parameters:
     AllowedValues: [dev, test, prod]
   DbEngineVersion:
     Type: String
-    Default: "16.4"
+    Default: "16.15"
   DbName:
     Type: String
     Default: appdb
