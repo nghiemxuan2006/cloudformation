@@ -182,18 +182,21 @@ Resources:
         - !Ref VpcEndpointSecurityGroup
 
   # POST /jobs runs in the private subnets (no NAT) and sends to SQS.
-  SqsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      VpcEndpointType: Interface
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.sqs
-      PrivateDnsEnabled: true
-      SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
-      SecurityGroupIds:
-        - !Ref VpcEndpointSecurityGroup
+  # TEMPORARILY DISABLED to save cost: while commented out, POST /jobs
+  # (myapp-<env>-jobs-post, in the VPC) cannot reach SQS and times out.
+  # process-job is unaffected (the Lambda service polls the queue outside the VPC).
+  # SqsEndpoint:
+  #   Type: AWS::EC2::VPCEndpoint
+  #   Properties:
+  #     VpcId: !Ref VPC
+  #     VpcEndpointType: Interface
+  #     ServiceName: !Sub com.amazonaws.${AWS::Region}.sqs
+  #     PrivateDnsEnabled: true
+  #     SubnetIds:
+  #       - !Ref PrivateSubnet1
+  #       - !Ref PrivateSubnet2
+  #     SecurityGroupIds:
+  #       - !Ref VpcEndpointSecurityGroup
 
   # ---------------------------------------------------------------------------
   # VPC flow logs (rejected traffic)
