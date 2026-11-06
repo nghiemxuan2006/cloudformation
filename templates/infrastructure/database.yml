@@ -20,6 +20,17 @@ Parameters:
   DbMinCapacity:
     Type: Number
     Default: 0.5
+    MinValue: 0
+    Description: >
+      Minimum ACUs. 0 enables auto-pause: the instance stops after
+      DbSecondsUntilAutoPause without connections and resumes (~15s) on the
+      next connection.
+  DbSecondsUntilAutoPause:
+    Type: Number
+    Default: 300
+    MinValue: 300
+    MaxValue: 86400
+    Description: Idle seconds before pausing (only used when DbMinCapacity is 0)
   DbMaxCapacity:
     Type: Number
     Default: 2
@@ -39,6 +50,7 @@ Parameters:
 
 Conditions:
   HasReader: !Equals [!Ref DbEnableReader, "true"]
+  DbAutoPause: !Equals [!Ref DbMinCapacity, "0"]
 
 Resources:
   DbSubnetGroup:
@@ -88,6 +100,10 @@ Resources:
       ServerlessV2ScalingConfiguration:
         MinCapacity: !Ref DbMinCapacity
         MaxCapacity: !Ref DbMaxCapacity
+        SecondsUntilAutoPause: !If
+          - DbAutoPause
+          - !Ref DbSecondsUntilAutoPause
+          - !Ref AWS::NoValue
 
   DbWriterInstance:
     Type: AWS::RDS::DBInstance
