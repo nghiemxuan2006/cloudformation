@@ -168,18 +168,21 @@ Resources:
       RouteTableIds:
         - !Ref PrivateRouteTable
 
-  SecretsManagerEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      VpcEndpointType: Interface
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
-      PrivateDnsEnabled: true
-      SubnetIds:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
-      SecurityGroupIds:
-        - !Ref VpcEndpointSecurityGroup
+  # TEMPORARILY DISABLED to save cost: while commented out, functions in the
+  # VPC cannot read secrets - GET /health/deps (reads the DB secret) fails.
+  # VpcEndpointSecurityGroup is kept (free) so re-enabling is just uncommenting.
+  # SecretsManagerEndpoint:
+  #   Type: AWS::EC2::VPCEndpoint
+  #   Properties:
+  #     VpcId: !Ref VPC
+  #     VpcEndpointType: Interface
+  #     ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+  #     PrivateDnsEnabled: true
+  #     SubnetIds:
+  #       - !Ref PrivateSubnet1
+  #       - !Ref PrivateSubnet2
+  #     SecurityGroupIds:
+  #       - !Ref VpcEndpointSecurityGroup
 
   # POST /jobs runs in the private subnets (no NAT) and sends to SQS.
   # TEMPORARILY DISABLED to save cost: while commented out, POST /jobs
