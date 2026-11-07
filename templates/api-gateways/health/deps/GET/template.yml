@@ -94,14 +94,16 @@ Resources:
       Environment:
         Variables:
           ENV_TYPE: !Ref EnvironmentType
-          DB_HOST: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbEndpoint
-          DB_PORT: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbPort
-          DB_NAME: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbName
-          DB_SECRET_ARN: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbSecretArn
+          # TEMPORARILY DISABLED with the Aurora cluster (database.yml):
+          # the aurora check reports a failure while these are unset.
+          # DB_HOST: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbEndpoint
+          # DB_PORT: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbPort
+          # DB_NAME: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbName
+          # DB_SECRET_ARN: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbSecretArn
           CACHE_HOST: !ImportValue
             Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
           CACHE_PORT: !ImportValue

@@ -48,9 +48,17 @@ Parameters:
     AllowedValues: ["true", "false"]
     Default: "false"
 
-Conditions:
-  HasReader: !Equals [!Ref DbEnableReader, "true"]
-  DbAutoPause: !Equals [!Ref DbMinCapacity, "0"]
+# TEMPORARILY DISABLED to save cost (Aurora cluster below is commented out).
+# The Db* parameters stay declared so re-enabling is just uncommenting.
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W2001   # Db* parameters unused while the cluster is disabled
+
+# Conditions:
+#   HasReader: !Equals [!Ref DbEnableReader, "true"]
+#   DbAutoPause: !Equals [!Ref DbMinCapacity, "0"]
 
 Resources:
   DbSubnetGroup:
@@ -74,77 +82,84 @@ Resources:
         rds.force_ssl: "1"
         log_min_duration_statement: "1000"
 
-  DbCluster:
-    Type: AWS::RDS::DBCluster
-    DeletionPolicy: Snapshot
-    UpdateReplacePolicy: Snapshot
-    Properties:
-      Engine: aurora-postgresql
-      EngineVersion: !Ref DbEngineVersion
-      DatabaseName: !Ref DbName
-      MasterUsername: app_admin
-      ManageMasterUserPassword: true
-      DBSubnetGroupName: !Ref DbSubnetGroup
-      DBClusterParameterGroupName: !Ref DbClusterParameterGroup
-      VpcSecurityGroupIds:
-        - !ImportValue
-          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DatabaseSecurityGroup
-      StorageEncrypted: true
-      BackupRetentionPeriod: !Ref DbBackupRetentionDays
-      PreferredBackupWindow: "18:00-19:00"            # 01:00-02:00 ICT
-      PreferredMaintenanceWindow: "sun:19:00-sun:20:00"
-      DeletionProtection: !Ref EnableDeletionProtection
-      CopyTagsToSnapshot: true
-      EnableCloudwatchLogsExports:
-        - postgresql
-      ServerlessV2ScalingConfiguration:
-        MinCapacity: !Ref DbMinCapacity
-        MaxCapacity: !Ref DbMaxCapacity
-        SecondsUntilAutoPause: !If
-          - DbAutoPause
-          - !Ref DbSecondsUntilAutoPause
-          - !Ref AWS::NoValue
+  # TEMPORARILY DISABLED to save cost: Aurora cluster + instances removed.
+  # DeletionPolicy: Snapshot -> CloudFormation takes a final snapshot on delete.
+  # DbSubnetGroup / DbClusterParameterGroup are kept (free) so the stack still
+  # has resources and re-enabling is just uncommenting.
+  # While disabled, GET /health/deps reports aurora as failed (503).
+  # DbCluster:
+  #   Type: AWS::RDS::DBCluster
+  #   DeletionPolicy: Snapshot
+  #   UpdateReplacePolicy: Snapshot
+  #   Properties:
+  #     Engine: aurora-postgresql
+  #     EngineVersion: !Ref DbEngineVersion
+  #     DatabaseName: !Ref DbName
+  #     MasterUsername: app_admin
+  #     ManageMasterUserPassword: true
+  #     DBSubnetGroupName: !Ref DbSubnetGroup
+  #     DBClusterParameterGroupName: !Ref DbClusterParameterGroup
+  #     VpcSecurityGroupIds:
+  #       - !ImportValue
+  #         Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DatabaseSecurityGroup
+  #     StorageEncrypted: true
+  #     BackupRetentionPeriod: !Ref DbBackupRetentionDays
+  #     PreferredBackupWindow: "18:00-19:00"            # 01:00-02:00 ICT
+  #     PreferredMaintenanceWindow: "sun:19:00-sun:20:00"
+  #     DeletionProtection: !Ref EnableDeletionProtection
+  #     CopyTagsToSnapshot: true
+  #     EnableCloudwatchLogsExports:
+  #       - postgresql
+  #     ServerlessV2ScalingConfiguration:
+  #       MinCapacity: !Ref DbMinCapacity
+  #       MaxCapacity: !Ref DbMaxCapacity
+  #       SecondsUntilAutoPause: !If
+  #         - DbAutoPause
+  #         - !Ref DbSecondsUntilAutoPause
+  #         - !Ref AWS::NoValue
 
-  DbWriterInstance:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      Engine: aurora-postgresql
-      DBInstanceClass: db.serverless
-      DBClusterIdentifier: !Ref DbCluster
-      PubliclyAccessible: false
-      AutoMinorVersionUpgrade: true
-      PromotionTier: 0
+  # DbWriterInstance:
+  #   Type: AWS::RDS::DBInstance
+  #   Properties:
+  #     Engine: aurora-postgresql
+  #     DBInstanceClass: db.serverless
+  #     DBClusterIdentifier: !Ref DbCluster
+  #     PubliclyAccessible: false
+  #     AutoMinorVersionUpgrade: true
+  #     PromotionTier: 0
 
-  DbReaderInstance:
-    Type: AWS::RDS::DBInstance
-    Condition: HasReader
-    DependsOn: DbWriterInstance
-    Properties:
-      Engine: aurora-postgresql
-      DBInstanceClass: db.serverless
-      DBClusterIdentifier: !Ref DbCluster
-      PubliclyAccessible: false
-      AutoMinorVersionUpgrade: true
-      PromotionTier: 1
+  # DbReaderInstance:
+  #   Type: AWS::RDS::DBInstance
+  #   Condition: HasReader
+  #   DependsOn: DbWriterInstance
+  #   Properties:
+  #     Engine: aurora-postgresql
+  #     DBInstanceClass: db.serverless
+  #     DBClusterIdentifier: !Ref DbCluster
+  #     PubliclyAccessible: false
+  #     AutoMinorVersionUpgrade: true
+  #     PromotionTier: 1
 
-Outputs:
-  DbEndpoint:
-    Value: !GetAtt DbCluster.Endpoint.Address
-    Export:
-      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbEndpoint
-  DbReaderEndpoint:
-    Value: !GetAtt DbCluster.ReadEndpoint.Address
-    Export:
-      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbReaderEndpoint
-  DbPort:
-    Value: !GetAtt DbCluster.Endpoint.Port
-    Export:
-      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbPort
-  DbName:
-    Value: !Ref DbName
-    Export:
-      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbName
-  DbSecretArn:
-    Value: !GetAtt DbCluster.MasterUserSecret.SecretArn
-    Export:
-      Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbSecretArn
+# TEMPORARILY DISABLED with the cluster. role.yml and the health/deps function
+# no longer import these exports.
+# Outputs:
+#   DbEndpoint:
+#     Value: !GetAtt DbCluster.Endpoint.Address
+#     Export:
+#       Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbEndpoint
+#   DbReaderEndpoint:
+#     Value: !GetAtt DbCluster.ReadEndpoint.Address
+#     Export:
+#       Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbReaderEndpoint
+#   DbPort:
+#     Value: !GetAtt DbCluster.Endpoint.Port
+#     Export:
+#       Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbPort
+#   DbName:
+#     Value: !Ref DbName
+#     Export:
+#       Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbName
+#   DbSecretArn:
+#     Value: !GetAtt DbCluster.MasterUserSecret.SecretArn
+#     Export:
+#       Name: !Sub ${InfrastructureName}-${EnvironmentType}-DbSecretArn
