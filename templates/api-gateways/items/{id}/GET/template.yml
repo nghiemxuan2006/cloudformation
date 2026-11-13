@@ -96,10 +96,12 @@ Resources:
           ENV_TYPE: !Ref EnvironmentType
           ITEMS_TABLE_NAME: !ImportValue
             Fn::Sub: ${InfrastructureName}-${EnvironmentType}-ItemsTableName
-          CACHE_HOST: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
-          CACHE_PORT: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CachePort
+          # TEMPORARILY DISABLED with the ElastiCache cluster (cache.yml):
+          # reads fall back to DynamoDB while these are unset.
+          # CACHE_HOST: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
+          # CACHE_PORT: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CachePort
           CACHE_TTL_SECONDS: !Ref CacheTtlSeconds
 
   ApiGatewayMethod:

@@ -104,10 +104,12 @@ Resources:
           #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbName
           # DB_SECRET_ARN: !ImportValue
           #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-DbSecretArn
-          CACHE_HOST: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
-          CACHE_PORT: !ImportValue
-            Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CachePort
+          # TEMPORARILY DISABLED with the ElastiCache cluster (cache.yml):
+          # the cache check reports a failure while these are unset.
+          # CACHE_HOST: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
+          # CACHE_PORT: !ImportValue
+          #   Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CachePort
           EFS_MOUNT_PATH: /mnt/efs
 
   ApiGatewayMethod:
