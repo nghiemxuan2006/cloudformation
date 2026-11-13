@@ -22,8 +22,16 @@ Parameters:
     MaxValue: 6
     Default: 1
 
-Conditions:
-  IsMultiNode: !Not [!Equals [!Ref CacheNumNodes, "1"]]
+# TEMPORARILY DISABLED to save cost (replication group below is commented out).
+# The Cache* parameters stay declared so re-enabling is just uncommenting.
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W2001   # Cache* parameters unused while the cache is disabled
+
+# Conditions:
+#   IsMultiNode: !Not [!Equals [!Ref CacheNumNodes, "1"]]
 
 Resources:
   CacheSubnetGroup:
@@ -36,31 +44,38 @@ Resources:
         - !ImportValue
           Fn::Sub: ${InfrastructureName}-${EnvironmentType}-PrivateSubnet2
 
-  CacheReplicationGroup:
-    Type: AWS::ElastiCache::ReplicationGroup
-    Properties:
-      ReplicationGroupDescription: !Sub ${InfrastructureName}-${EnvironmentType} cache
-      Engine: valkey
-      EngineVersion: !Ref CacheEngineVersion
-      CacheNodeType: !Ref CacheNodeType
-      NumCacheClusters: !Ref CacheNumNodes
-      AutomaticFailoverEnabled: !If [IsMultiNode, true, false]
-      MultiAZEnabled: !If [IsMultiNode, true, false]
-      CacheSubnetGroupName: !Ref CacheSubnetGroup
-      SecurityGroupIds:
-        - !ImportValue
-          Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheSecurityGroup
-      AtRestEncryptionEnabled: true
-      TransitEncryptionEnabled: true
-      SnapshotRetentionLimit: !If [IsMultiNode, 3, 0]
-      PreferredMaintenanceWindow: "sun:20:00-sun:21:00"
+  # TEMPORARILY DISABLED to save cost: Valkey replication group removed.
+  # CacheSubnetGroup is kept (free) so the stack still has a resource and
+  # re-enabling is just uncommenting.
+  # While disabled, GET /health/deps reports cache as failed (503) and
+  # GET /items/{id} always reads from DynamoDB (cache is best effort).
+  # CacheReplicationGroup:
+  #   Type: AWS::ElastiCache::ReplicationGroup
+  #   Properties:
+  #     ReplicationGroupDescription: !Sub ${InfrastructureName}-${EnvironmentType} cache
+  #     Engine: valkey
+  #     EngineVersion: !Ref CacheEngineVersion
+  #     CacheNodeType: !Ref CacheNodeType
+  #     NumCacheClusters: !Ref CacheNumNodes
+  #     AutomaticFailoverEnabled: !If [IsMultiNode, true, false]
+  #     MultiAZEnabled: !If [IsMultiNode, true, false]
+  #     CacheSubnetGroupName: !Ref CacheSubnetGroup
+  #     SecurityGroupIds:
+  #       - !ImportValue
+  #         Fn::Sub: ${InfrastructureName}-${EnvironmentType}-CacheSecurityGroup
+  #     AtRestEncryptionEnabled: true
+  #     TransitEncryptionEnabled: true
+  #     SnapshotRetentionLimit: !If [IsMultiNode, 3, 0]
+  #     PreferredMaintenanceWindow: "sun:20:00-sun:21:00"
 
-Outputs:
-  CacheEndpoint:
-    Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Address
-    Export:
-      Name: !Sub ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
-  CachePort:
-    Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Port
-    Export:
-      Name: !Sub ${InfrastructureName}-${EnvironmentType}-CachePort
+# TEMPORARILY DISABLED with the replication group. The health/deps and
+# items/{id} GET functions no longer import these exports.
+# Outputs:
+#   CacheEndpoint:
+#     Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Address
+#     Export:
+#       Name: !Sub ${InfrastructureName}-${EnvironmentType}-CacheEndpoint
+#   CachePort:
+#     Value: !GetAtt CacheReplicationGroup.PrimaryEndPoint.Port
+#     Export:
+#       Name: !Sub ${InfrastructureName}-${EnvironmentType}-CachePort
